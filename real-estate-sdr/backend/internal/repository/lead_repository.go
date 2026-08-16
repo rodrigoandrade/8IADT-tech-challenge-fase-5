@@ -2,11 +2,14 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 
 	"real-estate-sdr/internal/domain"
 )
+
+var ErrLeadNotFound = errors.New("lead not found")
 
 type LeadRepository interface {
 	Create(ctx context.Context, lead *domain.Lead) (*domain.Lead, error)

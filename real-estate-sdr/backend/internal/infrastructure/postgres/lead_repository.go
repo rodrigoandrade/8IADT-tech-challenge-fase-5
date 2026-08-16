@@ -2,9 +2,11 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"real-estate-sdr/internal/domain"
 	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
@@ -42,8 +44,17 @@ func (r *LeadRepository) GetByID(
 	id uuid.UUID,
 ) (*domain.Lead, error) {
 	result, err := r.queries.GetLeadByID(ctx, id)
+
 	if err != nil {
-		return nil, fmt.Errorf("get lead by id %s: %w", id, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, repository.ErrLeadNotFound
+		}
+
+		return nil, fmt.Errorf(
+			"get lead by id %s: %w",
+			id,
+			err,
+		)
 	}
 
 	return toDomainLead(result), nil
@@ -70,15 +81,22 @@ func (r *LeadRepository) Update(
 	ctx context.Context,
 	lead *domain.Lead,
 ) (*domain.Lead, error) {
-	result, err := r.queries.UpdateLead(ctx, generated.UpdateLeadParams{
-		ID:     lead.ID,
-		Name:   lead.Name,
-		Email:  lead.Email,
-		Phone:  lead.Phone,
-		Status: string(lead.Status),
-	})
+	result, err := r.queries.UpdateLead(
+		ctx,
+		generated.UpdateLeadParams{
+			ID:     lead.ID,
+			Name:   lead.Name,
+			Email:  lead.Email,
+			Phone:  lead.Phone,
+			Status: string(lead.Status),
+		},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("update lead %s: %w", lead.ID, err)
+		return nil, fmt.Errorf(
+			"update lead %s: %w",
+			lead.ID,
+			err,
+		)
 	}
 
 	return toDomainLead(result), nil
@@ -97,7 +115,11 @@ func (r *LeadRepository) UpdateStatus(
 		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("update lead status %s: %w", id, err)
+		return nil, fmt.Errorf(
+			"update lead status %s: %w",
+			id,
+			err,
+		)
 	}
 
 	return toDomainLead(result), nil
