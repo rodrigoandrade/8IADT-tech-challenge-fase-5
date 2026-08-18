@@ -1,0 +1,129 @@
+# ==========================================
+# Go
+# ==========================================
+
+# Build binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Coverage
+*.out
+coverage.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+
+# ==========================================
+# Environment / Secrets
+# ==========================================
+
+.env
+.env.*
+!.env.example
+
+# Local configuration
+*.local
+
+
+# ==========================================
+# IDEs
+# ==========================================
+
+# GoLand / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# VS Code
+.vscode/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+
+# ==========================================
+# Operating System
+# ==========================================
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+
+# ==========================================
+# Logs
+# ==========================================
+
+*.log
+logs/
+
+
+# ==========================================
+# Temporary files
+# ==========================================
+
+tmp/
+temp/
+*.tmp
+*.temp
+
+
+# ==========================================
+# Docker
+# ==========================================
+
+# Docker volumes / local data
+postgres_data/
+docker-data/
+
+# Docker overrides
+docker-compose.override.yml
+
+
+# ==========================================
+# Database
+# ==========================================
+
+# Local PostgreSQL dumps
+*.dump
+*.sql.bak
+
+
+# ==========================================
+# Generated files
+# ==========================================
+
+# sqlc generated files
+# NÃO ignorar por enquanto.
+#
+# internal/infrastructure/postgres/generated/
+#
+# Esses arquivos são necessários para o projeto
+# e podem ser versionados.
+
+
+# ==========================================
+# Local development
+# ==========================================
+
+*.pid
+*.seed

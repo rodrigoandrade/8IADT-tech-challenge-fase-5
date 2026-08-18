@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: real-estate-sdr-postgres
+
+    environment:
+      POSTGRES_DB: real_estate_sdr
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U postgres -d real_estate_sdr"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: real-estate-sdr-api
+
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/real_estate_sdr?sslmode=disable
+
+    ports:
+      - "8080:8080"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

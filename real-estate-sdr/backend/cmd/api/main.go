@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"real-estate-sdr/internal/infrastructure/postgres"
 	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
+	"syscall"
 	"time"
 
 	"real-estate-sdr/internal/application"
 	web "real-estate-sdr/internal/http"
-	"real-estate-sdr/internal/infrastructure/postgres"
 )
 
 func main() {
@@ -24,19 +27,29 @@ func main() {
 
 	pool, err := postgres.NewPool(ctx, databaseURL)
 	if err != nil {
-		log.Fatalf("failed to connect to PostgreSQL: %v", err)
+		log.Fatalf(
+			"failed to connect to PostgreSQL: %v",
+			err,
+		)
 	}
 	defer pool.Close()
 
-	log.Println("PostgreSQL connection established successfully")
+	log.Println(
+		"PostgreSQL connection established successfully",
+	)
 
 	queries := generated.New(pool)
 
 	leadRepository := postgres.NewLeadRepository(queries)
 
-	leadService := application.NewLeadService(leadRepository)
+	leadService := application.NewLeadService(
+		leadRepository,
+	)
 
-	router := web.NewRouter(leadService)
+	router := web.NewRouter(
+		leadService,
+		pool,
+	)
 
 	server := &http.Server{
 		Addr:              ":8080",
@@ -44,10 +57,43 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Println("HTTP server listening on :8080")
+	serverCtx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
-	if err := server.ListenAndServe(); err != nil &&
-		err != http.ErrServerClosed {
-		log.Fatalf("HTTP server failed: %v", err)
+	go func() {
+		log.Println("HTTP server listening on :8080")
+
+		if err := server.ListenAndServe(); err != nil &&
+			!errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf(
+				"HTTP server failed: %v",
+				err,
+			)
+		}
+	}()
+
+	<-serverCtx.Done()
+
+	log.Println("Shutdown signal received")
+
+	shutdownCtx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf(
+			"HTTP server shutdown failed: %v",
+			err,
+		)
+	} else {
+		log.Println("HTTP server stopped gracefully")
 	}
+
+	log.Println("Application stopped")
 }
