@@ -228,6 +228,15 @@ func handleServiceError(
 		return
 	}
 
+	if errors.Is(err, application.ErrLeadAlreadyExists) {
+		writeError(
+			w,
+			http.StatusConflict,
+			err.Error(),
+		)
+		return
+	}
+
 	writeError(
 		w,
 		http.StatusInternalServerError,

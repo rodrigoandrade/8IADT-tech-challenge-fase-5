@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	ErrInvalidLead  = errors.New("invalid lead")
-	ErrLeadNotFound = errors.New("lead not found")
+	ErrInvalidLead       = errors.New("invalid lead")
+	ErrLeadNotFound      = errors.New("lead not found")
+	ErrLeadAlreadyExists = errors.New("lead already exists")
 )
 
 type LeadService struct {
@@ -39,9 +40,23 @@ func (s *LeadService) Create(
 		lead.Status = domain.LeadStatusNew
 	}
 
+	if !isValidLeadStatus(lead.Status) {
+		return nil, fmt.Errorf(
+			"%w: invalid status",
+			ErrInvalidLead,
+		)
+	}
+
 	createdLead, err := s.repository.Create(ctx, lead)
 	if err != nil {
-		return nil, fmt.Errorf("create lead: %w", err)
+		if errors.Is(err, repository.ErrLeadAlreadyExists) {
+			return nil, ErrLeadAlreadyExists
+		}
+
+		return nil, fmt.Errorf(
+			"create lead: %w",
+			err,
+		)
 	}
 
 	return createdLead, nil
@@ -64,7 +79,10 @@ func (s *LeadService) GetByID(
 			return nil, ErrLeadNotFound
 		}
 
-		return nil, fmt.Errorf("get lead: %w", err)
+		return nil, fmt.Errorf(
+			"get lead: %w",
+			err,
+		)
 	}
 
 	return lead, nil
@@ -75,7 +93,10 @@ func (s *LeadService) List(
 ) ([]*domain.Lead, error) {
 	leads, err := s.repository.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list leads: %w", err)
+		return nil, fmt.Errorf(
+			"list leads: %w",
+			err,
+		)
 	}
 
 	return leads, nil
@@ -90,12 +111,29 @@ func (s *LeadService) Update(
 	}
 
 	if lead.ID == uuid.Nil {
-		return nil, fmt.Errorf("%w: id is required", ErrInvalidLead)
+		return nil, fmt.Errorf(
+			"%w: id is required",
+			ErrInvalidLead,
+		)
+	}
+
+	if !isValidLeadStatus(lead.Status) {
+		return nil, fmt.Errorf(
+			"%w: invalid status",
+			ErrInvalidLead,
+		)
 	}
 
 	updatedLead, err := s.repository.Update(ctx, lead)
 	if err != nil {
-		return nil, fmt.Errorf("update lead: %w", err)
+		if errors.Is(err, repository.ErrLeadNotFound) {
+			return nil, ErrLeadNotFound
+		}
+
+		return nil, fmt.Errorf(
+			"update lead: %w",
+			err,
+		)
 	}
 
 	return updatedLead, nil
@@ -107,16 +145,34 @@ func (s *LeadService) UpdateStatus(
 	status domain.LeadStatus,
 ) (*domain.Lead, error) {
 	if id == uuid.Nil {
-		return nil, fmt.Errorf("%w: id is required", ErrInvalidLead)
+		return nil, fmt.Errorf(
+			"%w: id is required",
+			ErrInvalidLead,
+		)
 	}
 
-	if status == "" {
-		return nil, fmt.Errorf("%w: status is required", ErrInvalidLead)
+	if !isValidLeadStatus(status) {
+		return nil, fmt.Errorf(
+			"%w: invalid status",
+			ErrInvalidLead,
+		)
 	}
 
-	lead, err := s.repository.UpdateStatus(ctx, id, status)
+	lead, err := s.repository.UpdateStatus(
+		ctx,
+		id,
+		status,
+	)
+
 	if err != nil {
-		return nil, fmt.Errorf("update lead status: %w", err)
+		if errors.Is(err, repository.ErrLeadNotFound) {
+			return nil, ErrLeadNotFound
+		}
+
+		return nil, fmt.Errorf(
+			"update lead status: %w",
+			err,
+		)
 	}
 
 	return lead, nil
@@ -127,7 +183,10 @@ func (s *LeadService) Count(
 ) (int64, error) {
 	count, err := s.repository.Count(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("count leads: %w", err)
+		return 0, fmt.Errorf(
+			"count leads: %w",
+			err,
+		)
 	}
 
 	return count, nil
@@ -135,20 +194,48 @@ func (s *LeadService) Count(
 
 func validateLead(lead *domain.Lead) error {
 	if lead == nil {
-		return fmt.Errorf("%w: lead is required", ErrInvalidLead)
+		return fmt.Errorf(
+			"%w: lead is required",
+			ErrInvalidLead,
+		)
 	}
 
 	if strings.TrimSpace(lead.Name) == "" {
-		return fmt.Errorf("%w: name is required", ErrInvalidLead)
+		return fmt.Errorf(
+			"%w: name is required",
+			ErrInvalidLead,
+		)
 	}
 
 	if strings.TrimSpace(lead.Email) == "" {
-		return fmt.Errorf("%w: email is required", ErrInvalidLead)
+		return fmt.Errorf(
+			"%w: email is required",
+			ErrInvalidLead,
+		)
 	}
 
 	if strings.TrimSpace(lead.Phone) == "" {
-		return fmt.Errorf("%w: phone is required", ErrInvalidLead)
+		return fmt.Errorf(
+			"%w: phone is required",
+			ErrInvalidLead,
+		)
 	}
 
 	return nil
+}
+
+func isValidLeadStatus(
+	status domain.LeadStatus,
+) bool {
+	switch status {
+	case domain.LeadStatusNew,
+		domain.LeadStatusContacted,
+		domain.LeadStatusQualified,
+		domain.LeadStatusConverted,
+		domain.LeadStatusLost:
+		return true
+
+	default:
+		return false
+	}
 }

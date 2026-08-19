@@ -36,7 +36,10 @@ func main() {
 
 	leadService := application.NewLeadService(leadRepository)
 
-	router := web.NewRouter(leadService)
+	router := web.NewRouter(
+		leadService,
+		pool,
+	)
 
 	server := &http.Server{
 		Addr:              ":8080",
