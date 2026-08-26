@@ -5,12 +5,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
 	"time"
 
 	"real-estate-sdr/internal/application"
 	web "real-estate-sdr/internal/http"
 	"real-estate-sdr/internal/infrastructure/postgres"
+	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
 )
 
 func main() {
@@ -24,20 +24,50 @@ func main() {
 
 	pool, err := postgres.NewPool(ctx, databaseURL)
 	if err != nil {
-		log.Fatalf("failed to connect to PostgreSQL: %v", err)
+		log.Fatalf(
+			"failed to connect to PostgreSQL: %v",
+			err,
+		)
 	}
 	defer pool.Close()
 
-	log.Println("PostgreSQL connection established successfully")
+	log.Println(
+		"PostgreSQL connection established successfully",
+	)
 
 	queries := generated.New(pool)
 
-	leadRepository := postgres.NewLeadRepository(queries)
+	// ---------------------------------------------------------
+	// LEAD
+	// ---------------------------------------------------------
 
-	leadService := application.NewLeadService(leadRepository)
+	leadRepository := postgres.NewLeadRepository(
+		queries,
+	)
+
+	leadService := application.NewLeadService(
+		leadRepository,
+	)
+
+	// ---------------------------------------------------------
+	// PROPERTY
+	// ---------------------------------------------------------
+
+	propertyRepository := postgres.NewPropertyRepository(
+		queries,
+	)
+
+	propertyService := application.NewPropertyService(
+		propertyRepository,
+	)
+
+	// ---------------------------------------------------------
+	// HTTP
+	// ---------------------------------------------------------
 
 	router := web.NewRouter(
 		leadService,
+		propertyService,
 		pool,
 	)
 
@@ -51,6 +81,9 @@ func main() {
 
 	if err := server.ListenAndServe(); err != nil &&
 		err != http.ErrServerClosed {
-		log.Fatalf("HTTP server failed: %v", err)
+		log.Fatalf(
+			"HTTP server failed: %v",
+			err,
+		)
 	}
 }
