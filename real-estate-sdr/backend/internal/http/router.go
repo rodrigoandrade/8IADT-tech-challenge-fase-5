@@ -12,18 +12,28 @@ import (
 func NewRouter(
 	leadService *application.LeadService,
 	propertyService *application.PropertyService,
+	conversationService *application.ConversationService,
 	pool *pgxpool.Pool,
 ) http.Handler {
 	mux := http.NewServeMux()
 
-	leadHandler := handler.NewLeadHandler(leadService)
-	propertyHandler := handler.NewPropertyHandler(propertyService)
-	healthHandler := handler.NewHealthHandler(pool)
+	leadHandler := handler.NewLeadHandler(
+		leadService,
+	)
 
-	// ---------------------------------------------------------
-	// HEALTH
-	// ---------------------------------------------------------
+	propertyHandler := handler.NewPropertyHandler(
+		propertyService,
+	)
 
+	conversationHandler := handler.NewConversationHandler(
+		conversationService,
+	)
+
+	healthHandler := handler.NewHealthHandler(
+		pool,
+	)
+
+	// Health
 	mux.HandleFunc(
 		"GET /health",
 		healthHandler.Check,
@@ -34,10 +44,7 @@ func NewRouter(
 		healthHandler.Ready,
 	)
 
-	// ---------------------------------------------------------
-	// LEADS
-	// ---------------------------------------------------------
-
+	// Leads
 	mux.HandleFunc(
 		"POST /leads",
 		leadHandler.Create,
@@ -63,10 +70,7 @@ func NewRouter(
 		leadHandler.UpdateStatus,
 	)
 
-	// ---------------------------------------------------------
-	// PROPERTIES
-	// ---------------------------------------------------------
-
+	// Properties
 	mux.HandleFunc(
 		"POST /properties",
 		propertyHandler.Create,
@@ -90,6 +94,32 @@ func NewRouter(
 	mux.HandleFunc(
 		"PATCH /properties/{id}/status",
 		propertyHandler.UpdateStatus,
+	)
+
+	// Conversations
+	mux.HandleFunc(
+		"POST /conversations",
+		conversationHandler.Create,
+	)
+
+	mux.HandleFunc(
+		"GET /conversations",
+		conversationHandler.List,
+	)
+
+	mux.HandleFunc(
+		"GET /conversations/{id}",
+		conversationHandler.GetByID,
+	)
+
+	mux.HandleFunc(
+		"GET /leads/{leadID}/conversations",
+		conversationHandler.ListByLead,
+	)
+
+	mux.HandleFunc(
+		"PATCH /conversations/{id}/close",
+		conversationHandler.Close,
 	)
 
 	return mux
