@@ -683,14 +683,25 @@ func newTestRouter(
 ) http.Handler {
 	queries := generated.New(pool)
 
-	leadRepository := postgres.NewLeadRepository(queries)
+	leadRepository := postgres.NewLeadRepository(
+		queries,
+	)
 
 	leadService := application.NewLeadService(
 		leadRepository,
 	)
 
+	propertyRepository := postgres.NewPropertyRepository(
+		queries,
+	)
+
+	propertyService := application.NewPropertyService(
+		propertyRepository,
+	)
+
 	return web.NewRouter(
 		leadService,
+		propertyService,
 		pool,
 	)
 }
