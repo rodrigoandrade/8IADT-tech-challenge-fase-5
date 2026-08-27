@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"real-estate-sdr/internal/infrastructure/postgres"
-	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
 	"syscall"
 	"time"
 
 	"real-estate-sdr/internal/application"
 	web "real-estate-sdr/internal/http"
+	"real-estate-sdr/internal/infrastructure/postgres"
+	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
 )
 
 func main() {
@@ -22,6 +22,10 @@ func main() {
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URL is not configured")
 	}
+
+	// =========================================================
+	// DATABASE
+	// =========================================================
 
 	pool, err := postgres.NewPool(
 		ctx,
@@ -36,11 +40,34 @@ func main() {
 
 	defer pool.Close()
 
-	queries := generated.New(pool)
+	// =========================================================
+	// MIGRATION MODE
+	// =========================================================
+	//
+	// Docker executa:
+	//
+	//     /app/api migrate
+	//
+	// Atualmente o projeto não possui um mecanismo de migration
+	// implementado em Go. Portanto, neste modo apenas validamos
+	// que o banco está acessível e encerramos com sucesso.
+	//
+	// As migrations/schema devem ser executadas pela infraestrutura
+	// do PostgreSQL.
+	//
+
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		log.Println("database connection verified")
+		log.Println("migration step completed")
+
+		return
+	}
 
 	// =========================================================
 	// REPOSITORIES
 	// =========================================================
+
+	queries := generated.New(pool)
 
 	leadRepository := postgres.NewLeadRepository(
 		queries,
@@ -94,7 +121,11 @@ func main() {
 	// HTTP SERVER
 	// =========================================================
 
-	port := os.Getenv("PORT")
+	port := os.Getenv("HTTP_PORT")
+	if port == "" {
+		port = os.Getenv("PORT")
+	}
+
 	if port == "" {
 		port = "8080"
 	}

@@ -3,17 +3,20 @@
 
 .env
 .env.*
-
-Dockerfile
-docker-compose.yml
+!.env.example
 
 bin/
+dist/
+
 tmp/
 
 coverage/
-*.log
+*.out
 
 .vscode/
 .idea/
 
-**/*_test.go
+Dockerfile*
+docker-compose*.yml
+
+README.md
