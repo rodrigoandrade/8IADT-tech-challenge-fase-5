@@ -73,10 +73,19 @@ func setupConversationTestServer(
 		conversationRepository,
 	)
 
+	messageRepository := postgres.NewMessageRepository(
+		queries,
+	)
+
+	messageService := application.NewMessageService(
+		messageRepository,
+	)
+
 	router := web.NewRouter(
 		leadService,
 		propertyService,
 		conversationService,
+		messageService,
 		pool,
 	)
 

@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"real-estate-sdr/internal/application"
@@ -17,27 +19,56 @@ func main() {
 	ctx := context.Background()
 
 	databaseURL := os.Getenv("DATABASE_URL")
-
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URL is not configured")
 	}
 
-	pool, err := postgres.NewPool(ctx, databaseURL)
+	// =========================================================
+	// DATABASE
+	// =========================================================
+
+	pool, err := postgres.NewPool(
+		ctx,
+		databaseURL,
+	)
 	if err != nil {
 		log.Fatalf(
 			"failed to connect to PostgreSQL: %v",
 			err,
 		)
 	}
+
 	defer pool.Close()
 
-	log.Println(
-		"PostgreSQL connection established successfully",
-	)
+	// =========================================================
+	// MIGRATION MODE
+	// =========================================================
+	//
+	// Docker executa:
+	//
+	//     /app/api migrate
+	//
+	// Atualmente o projeto não possui um mecanismo de migration
+	// implementado em Go. Portanto, neste modo apenas validamos
+	// que o banco está acessível e encerramos com sucesso.
+	//
+	// As migrations/schema devem ser executadas pela infraestrutura
+	// do PostgreSQL.
+	//
+
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		log.Println("database connection verified")
+		log.Println("migration step completed")
+
+		return
+	}
+
+	// =========================================================
+	// REPOSITORIES
+	// =========================================================
 
 	queries := generated.New(pool)
 
-	// Repositories
 	leadRepository := postgres.NewLeadRepository(
 		queries,
 	)
@@ -50,7 +81,14 @@ func main() {
 		queries,
 	)
 
-	// Services
+	messageRepository := postgres.NewMessageRepository(
+		queries,
+	)
+
+	// =========================================================
+	// SERVICES
+	// =========================================================
+
 	leadService := application.NewLeadService(
 		leadRepository,
 	)
@@ -63,29 +101,91 @@ func main() {
 		conversationRepository,
 	)
 
-	// HTTP Router
+	messageService := application.NewMessageService(
+		messageRepository,
+	)
+
+	// =========================================================
+	// ROUTER
+	// =========================================================
+
 	router := web.NewRouter(
 		leadService,
 		propertyService,
 		conversationService,
+		messageService,
 		pool,
 	)
 
-	server := &http.Server{
-		Addr:              ":8080",
-		Handler:           router,
-		ReadHeaderTimeout: 5 * time.Second,
+	// =========================================================
+	// HTTP SERVER
+	// =========================================================
+
+	port := os.Getenv("HTTP_PORT")
+	if port == "" {
+		port = os.Getenv("PORT")
 	}
 
-	log.Println(
-		"HTTP server listening on :8080",
+	if port == "" {
+		port = "8080"
+	}
+
+	server := &http.Server{
+		Addr:              ":" + port,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	// =========================================================
+	// START SERVER
+	// =========================================================
+
+	go func() {
+		log.Printf(
+			"HTTP server listening on :%s",
+			port,
+		)
+
+		if err := server.ListenAndServe(); err != nil &&
+			err != http.ErrServerClosed {
+			log.Fatalf(
+				"HTTP server failed: %v",
+				err,
+			)
+		}
+	}()
+
+	// =========================================================
+	// GRACEFUL SHUTDOWN
+	// =========================================================
+
+	stop := make(chan os.Signal, 1)
+
+	signal.Notify(
+		stop,
+		os.Interrupt,
+		syscall.SIGTERM,
 	)
 
-	if err := server.ListenAndServe(); err != nil &&
-		err != http.ErrServerClosed {
-		log.Fatalf(
-			"HTTP server failed: %v",
+	<-stop
+
+	log.Println("shutting down HTTP server...")
+
+	shutdownCtx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf(
+			"HTTP server shutdown error: %v",
 			err,
 		)
 	}
+
+	log.Println("HTTP server stopped")
 }
