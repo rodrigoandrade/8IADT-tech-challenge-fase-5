@@ -37,37 +37,37 @@ func main() {
 
 	queries := generated.New(pool)
 
-	// ---------------------------------------------------------
-	// LEAD
-	// ---------------------------------------------------------
-
+	// Repositories
 	leadRepository := postgres.NewLeadRepository(
 		queries,
 	)
 
-	leadService := application.NewLeadService(
-		leadRepository,
-	)
-
-	// ---------------------------------------------------------
-	// PROPERTY
-	// ---------------------------------------------------------
-
 	propertyRepository := postgres.NewPropertyRepository(
 		queries,
+	)
+
+	conversationRepository := postgres.NewConversationRepository(
+		queries,
+	)
+
+	// Services
+	leadService := application.NewLeadService(
+		leadRepository,
 	)
 
 	propertyService := application.NewPropertyService(
 		propertyRepository,
 	)
 
-	// ---------------------------------------------------------
-	// HTTP
-	// ---------------------------------------------------------
+	conversationService := application.NewConversationService(
+		conversationRepository,
+	)
 
+	// HTTP Router
 	router := web.NewRouter(
 		leadService,
 		propertyService,
+		conversationService,
 		pool,
 	)
 
@@ -77,7 +77,9 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Println("HTTP server listening on :8080")
+	log.Println(
+		"HTTP server listening on :8080",
+	)
 
 	if err := server.ListenAndServe(); err != nil &&
 		err != http.ErrServerClosed {

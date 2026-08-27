@@ -699,9 +699,18 @@ func newTestRouter(
 		propertyRepository,
 	)
 
+	conversationRepository := postgres.NewConversationRepository(
+		queries,
+	)
+
+	conversationService := application.NewConversationService(
+		conversationRepository,
+	)
+
 	return web.NewRouter(
 		leadService,
 		propertyService,
+		conversationService,
 		pool,
 	)
 }
