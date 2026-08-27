@@ -707,12 +707,22 @@ func newTestRouter(
 		conversationRepository,
 	)
 
+	messageRepository := postgres.NewMessageRepository(
+		queries,
+	)
+
+	messageService := application.NewMessageService(
+		messageRepository,
+	)
+
 	return web.NewRouter(
 		leadService,
 		propertyService,
 		conversationService,
+		messageService,
 		pool,
 	)
+
 }
 
 func newTestPool(

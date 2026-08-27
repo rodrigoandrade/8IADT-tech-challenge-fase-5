@@ -1,23 +1,68 @@
 package domain
 
 import (
-	"time"
+	"errors"
+	"strings"
 
 	"github.com/google/uuid"
 )
 
-type MessageRole string
-
 const (
-	MessageRoleUser      MessageRole = "USER"
-	MessageRoleAssistant MessageRole = "ASSISTANT"
-	MessageRoleSystem    MessageRole = "SYSTEM"
+	MessageRoleUser      = "USER"
+	MessageRoleAssistant = "ASSISTANT"
+	MessageRoleSystem    = "SYSTEM"
+)
+
+var (
+	ErrNilMessage            = errors.New("message is required")
+	ErrMessageConversationID = errors.New("message conversation is required")
+	ErrMessageRole           = errors.New("message role is required")
+	ErrInvalidMessageRole    = errors.New("invalid message role")
+	ErrMessageContent        = errors.New("message content is required")
 )
 
 type Message struct {
-	ID             uuid.UUID   `json:"id"`
-	ConversationID uuid.UUID   `json:"conversation_id"`
-	Role           MessageRole `json:"role"`
-	Content        string      `json:"content"`
-	CreatedAt      time.Time   `json:"created_at"`
+	ID             uuid.UUID
+	ConversationID uuid.UUID
+	Role           string
+	Content        string
+}
+
+func (m *Message) Validate() error {
+	if m == nil {
+		return ErrNilMessage
+	}
+
+	if m.ConversationID == uuid.Nil {
+		return ErrMessageConversationID
+	}
+
+	m.Role = strings.ToUpper(strings.TrimSpace(m.Role))
+
+	if m.Role == "" {
+		return ErrMessageRole
+	}
+
+	if !IsValidMessageRole(m.Role) {
+		return ErrInvalidMessageRole
+	}
+
+	m.Content = strings.TrimSpace(m.Content)
+
+	if m.Content == "" {
+		return ErrMessageContent
+	}
+
+	return nil
+}
+
+func IsValidMessageRole(role string) bool {
+	switch strings.ToUpper(strings.TrimSpace(role)) {
+	case MessageRoleUser,
+		MessageRoleAssistant,
+		MessageRoleSystem:
+		return true
+	default:
+		return false
+	}
 }

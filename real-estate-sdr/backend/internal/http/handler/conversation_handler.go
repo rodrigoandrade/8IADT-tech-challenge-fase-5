@@ -148,12 +148,13 @@ func (h *ConversationHandler) List(
 }
 
 // GET /leads/{leadID}/conversations
+// GET /leads/{id}/conversations
 func (h *ConversationHandler) ListByLead(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
 	leadID, err := uuid.Parse(
-		r.PathValue("leadID"),
+		r.PathValue("id"),
 	)
 	if err != nil {
 		writeError(
@@ -169,7 +170,10 @@ func (h *ConversationHandler) ListByLead(
 		leadID,
 	)
 	if err != nil {
-		handleConversationServiceError(w, err)
+		handleConversationServiceError(
+			w,
+			err,
+		)
 		return
 	}
 

@@ -859,12 +859,22 @@ func newPropertyTestRouter(
 		conversationRepository,
 	)
 
+	messageRepository := postgres.NewMessageRepository(
+		queries,
+	)
+
+	messageService := application.NewMessageService(
+		messageRepository,
+	)
+
 	return web.NewRouter(
 		nil,
 		propertyService,
 		conversationService,
+		messageService,
 		pool,
 	)
+
 }
 
 func newPropertyTestPool(
