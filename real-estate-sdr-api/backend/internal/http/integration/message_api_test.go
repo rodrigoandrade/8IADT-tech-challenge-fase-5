@@ -271,13 +271,11 @@ func TestMessageAPI_CreateAndGet(t *testing.T) {
 		Content:        "Olá, gostaria de saber mais sobre o imóvel.",
 	}
 
-	data, err := json.Marshal(message)
-	if err != nil {
-		t.Fatalf(
-			"failed to marshal message: %v",
-			err,
-		)
-	}
+	data := []byte(`{
+    	"conversation_id": "` + conversationID.String() + `",
+    	"role": "USER",
+    	"content": "Olá, gostaria de saber mais sobre o imóvel."
+	}`)
 
 	req := httptest.NewRequest(
 		http.MethodPost,

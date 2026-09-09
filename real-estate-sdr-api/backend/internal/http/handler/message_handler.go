@@ -16,6 +16,12 @@ type MessageHandler struct {
 	service *application.MessageService
 }
 
+type createMessageRequest struct {
+	ConversationID uuid.UUID `json:"conversation_id"`
+	Role           string    `json:"role"`
+	Content        string    `json:"content"`
+}
+
 func NewMessageHandler(service *application.MessageService) *MessageHandler {
 	return &MessageHandler{
 		service: service,
@@ -25,11 +31,17 @@ func NewMessageHandler(service *application.MessageService) *MessageHandler {
 // Create godoc
 // POST /messages
 func (h *MessageHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var message domain.Message
+	var request createMessageRequest
 
-	if err := decodeJSON(r, &message); err != nil {
+	if err := decodeJSON(r, &request); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON")
 		return
+	}
+
+	message := domain.Message{
+		ConversationID: request.ConversationID,
+		Role:           request.Role,
+		Content:        request.Content,
 	}
 
 	created, err := h.service.Create(r.Context(), &message)

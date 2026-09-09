@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -122,10 +121,11 @@ func TestMessageHandler_Create(t *testing.T) {
 		service := newTestMessageService(repository)
 		handler := NewMessageHandler(service)
 
-		payload, err := json.Marshal(expected)
-		if err != nil {
-			t.Fatalf("failed to marshal message: %v", err)
-		}
+		payload := []byte(`{
+			"conversation_id": "` + expected.ConversationID.String() + `",
+			"role": "USER",
+			"content": "Gostaria de saber mais sobre este imóvel."
+		}`)
 
 		req := httptest.NewRequest(
 			http.MethodPost,
