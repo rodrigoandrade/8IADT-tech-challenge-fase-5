@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+openai
+httpx
+
+SQLAlchemy>=2.0
+asyncpg
+alembic

@@ -20,6 +20,53 @@ class RealEstateAPIClient:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
 
+    async def create_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+    ) -> dict[str, Any]:
+
+        payload = {
+            "conversation_id": conversation_id,
+            "role": role,
+            "content": content,
+        }
+
+        url = f"{self._base_url}/messages"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout
+            ) as client:
+
+                response = await client.post(
+                    url,
+                    json=payload,
+                )
+
+        except httpx.RequestError as exc:
+            raise RuntimeError(
+                "Failed to communicate with "
+                f"real-estate-sdr-api: {exc}"
+            ) from exc
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                "real-estate-sdr-api returned "
+                f"HTTP {response.status_code}: "
+                f"{response.text}"
+            )
+
+        try:
+            return response.json()
+
+        except ValueError as exc:
+            raise RuntimeError(
+                "Invalid JSON response from "
+                f"real-estate-sdr-api: {response.text}"
+            ) from exc
+
     async def get_conversation(
         self,
         conversation_id: str,
