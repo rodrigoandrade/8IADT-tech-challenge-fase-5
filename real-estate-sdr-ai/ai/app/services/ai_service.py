@@ -1,24 +1,16 @@
-import json
-import unicodedata
-
-from dataclasses import replace
 from typing import Any
 
 from ai.app.agent.state import (
     ConversationFlow,
     ConversationState,
-    ConversationStateType,
     NextAction,
 )
 from ai.app.agent.state_machine import ConversationStateMachine
 from ai.app.clients.real_estate_api_client import RealEstateAPIClient
 from ai.app.llm.provider import LLMProvider
 from ai.app.llm.response_parser import ResponseParser
-from ai.app.models.conversation import (
-    Conversation,
-    ConversationMessage,
-    MessageRole,
-)
+from ai.app.models.ai_response import AIResponse
+from ai.app.models.conversation import Conversation
 from ai.app.prompt.prompt_builder import PromptBuilder
 from ai.app.repositories.conversation_state_repository import (
     ConversationStateRepository,
@@ -26,24 +18,22 @@ from ai.app.repositories.conversation_state_repository import (
 
 
 class AIService:
+    """
+    Serviço responsável por orquestrar o atendimento do SDR.
 
-    SOUTH_ZONE_NEIGHBORHOODS = {
-        "moema",
-        "vila mariana",
-        "saude",
-        "campo belo",
-        "campo grande",
-        "santo amaro",
-        "ipiranga",
-        "brooklin",
-        "brooklin paulista",
-        "morumbi",
-        "vila andrade",
-        "chacara flora",
-        "jardim paulista",
-        "jardim europa",
-        "itaim bibi",
-    }
+    Responsabilidades:
+
+    - recuperar o lead;
+    - recuperar o estado da conversa;
+    - interpretar a mensagem através do LLM;
+    - atualizar a qualificação;
+    - executar a máquina de estados;
+    - buscar imóveis quando necessário;
+    - gerar recomendações;
+    - persistir o estado;
+    - persistir mensagens;
+    - retornar o resultado estruturado para a API.
+    """
 
     def __init__(
         self,
@@ -61,786 +51,837 @@ class AIService:
         self.state_repository = state_repository
         self.state_machine = state_machine
 
-    # =========================================================
-    # PUBLIC
-    # =========================================================
-
     async def generate_response(
         self,
         conversation: Conversation,
     ) -> dict[str, Any]:
 
-        conversation_id = str(
-            conversation.id
-        )
+        conversation_id = conversation.id
+        lead_id = conversation.lead_id
 
-        # ---------------------------------------------------------
-        # 1. Validação
-        # ---------------------------------------------------------
-
-        if not conversation_id.strip():
+        if not conversation_id:
             raise ValueError(
                 "conversation id cannot be empty"
             )
 
-        if not conversation.lead_id.strip():
+        if not lead_id:
             raise ValueError(
                 "lead id cannot be empty"
             )
 
-        current_lead_message = (
-            self._get_current_lead_message(
-                conversation
-            )
-        )
+        lead_message = conversation.last_lead_message
 
-        if current_lead_message is None:
+        if lead_message is None:
             raise ValueError(
-                "conversation must contain a lead message"
+                "conversation must contain at least one lead message"
             )
 
-        # ---------------------------------------------------------
-        # 2. Buscar contexto do backend
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 1. Buscar lead
+        # ==============================================================
 
         lead = await self.api_client.get_lead(
-            conversation.lead_id
+            lead_id
         )
 
-        persisted_messages = (
-            await self.api_client.get_messages(
-                conversation_id
+        if lead is None:
+            raise ValueError(
+                f"Lead not found: {lead_id}"
             )
-        )
 
-        # ---------------------------------------------------------
-        # 3. Montar histórico completo
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 2. Recuperar ou criar estado
+        # ==============================================================
 
-        history = self._build_conversation_history(
-            conversation=conversation,
-            persisted_messages=persisted_messages,
-        )
-
-        conversation_with_history = replace(
-            conversation,
-            messages=history,
-        )
-
-        # ---------------------------------------------------------
-        # 4. Persistir mensagem do lead caso necessário
-        # ---------------------------------------------------------
-
-        await self._persist_lead_message_if_needed(
-            conversation_id=conversation_id,
-            message=current_lead_message,
-            persisted_messages=persisted_messages,
-        )
-
-        # ---------------------------------------------------------
-        # 5. Recuperar estado persistido
-        # ---------------------------------------------------------
-
-        state = await self.state_repository.get(
+        state = await self._get_or_create_state(
             conversation_id
         )
 
-        if state is None:
-            state = ConversationState(
-                conversation_id=conversation_id,
-                state=ConversationStateType.NEW,
-            )
+        # ==============================================================
+        # 3. Persistir mensagem do lead
+        # ==============================================================
 
-        # ---------------------------------------------------------
-        # 6. Buscar imóveis
-        #
-        # Neste momento enviamos os imóveis ao LLM somente como
-        # contexto. A escolha definitiva será feita pelo matching
-        # determinístico abaixo.
-        # ---------------------------------------------------------
-
-        properties = (
-            await self.api_client.get_properties()
+        await self._persist_lead_message_if_needed(
+            conversation_id=conversation_id,
+            lead_message=lead_message,
         )
 
-        # ---------------------------------------------------------
-        # 7. Construir prompt
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 4. Buscar propriedades somente quando necessário
+        # ==============================================================
+
+        properties: list[dict[str, Any]] = []
+
+        # Neste primeiro LLM ainda não temos o novo estado calculado.
+        # Portanto não fazemos matching aqui.
+        #
+        # O matching acontece depois que o LLM extrair os dados
+        # da mensagem atual e a State Machine determinar MATCH_PROPERTY.
+
+        # ==============================================================
+        # 5. Construir prompt
+        # ==============================================================
 
         prompt = self.prompt_builder.build(
             lead=lead,
-            conversation=conversation_with_history,
+            conversation=conversation,
             properties=properties,
+            matched_properties=[],
+            state=state,
         )
 
-        # ---------------------------------------------------------
-        # 8. LLM interpreta a conversa
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 6. Executar LLM
+        # ==============================================================
 
-        raw_response = (
-            await self.llm_provider.generate_response(
-                prompt
-            )
+        llm_response = await self.llm_provider.generate_response(
+            prompt
         )
 
-        # ---------------------------------------------------------
-        # 9. Parse da resposta
-        # ---------------------------------------------------------
+        print("\n========== LLM RESPONSE ==========")
+        print(llm_response)
+        print("==================================\n")
+
+        # ==============================================================
+        # 7. Parsear resposta
+        # ==============================================================
 
         response = self.response_parser.parse(
-            raw_response
+            llm_response
         )
 
-        # ---------------------------------------------------------
-        # 10. Atualizar estado
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 8. Atualizar estado com dados extraídos
+        # ==============================================================
 
         state = self._update_state_from_llm(
             state=state,
             response=response,
         )
 
-        # ---------------------------------------------------------
-        # 11. State Machine
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 9. State Machine
+        # ==============================================================
 
         state = self.state_machine.transition(
             state
         )
 
-        # ---------------------------------------------------------
-        # 12. Matching determinístico
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 10. Matching de imóveis
+        # ==============================================================
 
-        matched_properties = []
+        matched_properties: list[dict[str, Any]] = []
 
         if state.next_action == NextAction.MATCH_PROPERTY:
 
-            matched_properties = self._match_properties(
-                state=state,
-                properties=properties,
+            matched_properties = await self._match_properties(
+                state
             )
 
             if matched_properties:
 
-                selected_property_id = str(
-                    matched_properties[0]["id"]
+                state = self._apply_property_match(
+                    state=state,
+                    matched_properties=matched_properties,
                 )
 
-                state = replace(
-                    state,
-                    state=ConversationStateType.RECOMMEND_PROPERTIES,
-                    next_action=NextAction.RECOMMEND_PROPERTY,
-                    selected_property_id=selected_property_id,
+                state = self.state_machine.transition(
+                    state
                 )
 
-            else:
+        # ==============================================================
+        # 11. Recomendação
+        # ==============================================================
 
-                state = replace(
-                    state,
-                    state=ConversationStateType.RECOMMEND_PROPERTIES,
-                    next_action=NextAction.RECOMMEND_PROPERTY,
-                    selected_property_id=None,
-                )
+        if (
+            state.next_action == NextAction.RECOMMEND_PROPERTY
+            and matched_properties
+        ):
+            response = await self._generate_property_recommendation(
+                lead=lead,
+                conversation=conversation,
+                state=state,
+                properties=matched_properties,
+            )
 
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 12. Caso não tenha encontrado imóveis
+        # ==============================================================
+
+        if (
+            state.next_action == NextAction.MATCH_PROPERTY
+            and not matched_properties
+        ):
+            response = self._build_no_property_response(
+                response=response,
+                state=state,
+            )
+
+        # ==============================================================
         # 13. Persistir estado
-        # ---------------------------------------------------------
+        # ==============================================================
 
-        state = await self.state_repository.save(
+        await self.state_repository.save(
             state
         )
 
-        # ---------------------------------------------------------
-        # 14. Gerar resposta final
-        #
-        # Se houver imóveis encontrados, fazemos uma segunda
-        # chamada ao LLM contendo somente os imóveis compatíveis.
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 14. Persistir resposta do assistant
+        # ==============================================================
 
-        if state.next_action == NextAction.RECOMMEND_PROPERTY:
+        await self._persist_assistant_message(
+            conversation_id=conversation_id,
+            response=response,
+        )
 
-            recommendation_prompt = (
-                self.prompt_builder.build(
-                    lead=lead,
-                    conversation=conversation_with_history,
-                    properties=matched_properties,
-                )
-            )
-
-            recommendation_raw_response = (
-                await self.llm_provider.generate_response(
-                    recommendation_prompt
-                )
-            )
-
-            response = self.response_parser.parse(
-                recommendation_raw_response
-            )
-
-        # ---------------------------------------------------------
-        # 15. Persistir resposta do assistente
-        # ---------------------------------------------------------
-
-        assistant_message = response.message
-
-        if assistant_message:
-            await self.api_client.create_message(
-                conversation_id=conversation_id,
-                role="ASSISTANT",
-                content=assistant_message,
-            )
-
-        # ---------------------------------------------------------
-        # 16. Retornar resposta
-        # ---------------------------------------------------------
+        # ==============================================================
+        # 15. Retornar
+        # ==============================================================
 
         return self._build_response(
-            response=response,
             state=state,
+            response=response,
             matched_properties=matched_properties,
         )
 
-    # =========================================================
-    # CONVERSATION HISTORY
-    # =========================================================
+    # ==================================================================
+    # STATE
+    # ==================================================================
 
-    def _build_conversation_history(
-        self,
-        conversation: Conversation,
-        persisted_messages: list[dict[str, Any]],
-    ) -> list[ConversationMessage]:
-
-        history: list[ConversationMessage] = []
-
-        # ---------------------------------------------------------
-        # Mensagens persistidas no backend
-        # ---------------------------------------------------------
-
-        for message in persisted_messages:
-
-            converted = self._convert_api_message(
-                message
-            )
-
-            if converted is not None:
-                history.append(converted)
-
-        # ---------------------------------------------------------
-        # Mensagens recebidas nesta requisição
-        # ---------------------------------------------------------
-
-        for message in conversation.messages:
-
-            if not self._message_exists(
-                history,
-                message,
-            ):
-                history.append(message)
-
-        return history
-
-    def _convert_api_message(
-        self,
-        message: dict[str, Any],
-    ) -> ConversationMessage | None:
-
-        role = message.get("role")
-        content = message.get("content")
-
-        if not content:
-            return None
-
-        role_mapping = {
-            "USER": MessageRole.LEAD,
-            "user": MessageRole.LEAD,
-            "LEAD": MessageRole.LEAD,
-            "lead": MessageRole.LEAD,
-
-            "ASSISTANT": MessageRole.ASSISTANT,
-            "assistant": MessageRole.ASSISTANT,
-
-            "SYSTEM": MessageRole.SYSTEM,
-            "system": MessageRole.SYSTEM,
-        }
-
-        mapped_role = role_mapping.get(
-            str(role)
-        )
-
-        if mapped_role is None:
-            return None
-
-        return ConversationMessage(
-            role=mapped_role,
-            content=str(content),
-        )
-
-    @staticmethod
-    def _message_exists(
-        history: list[ConversationMessage],
-        message: ConversationMessage,
-    ) -> bool:
-
-        return any(
-            existing.role == message.role
-            and existing.content.strip()
-            == message.content.strip()
-            for existing in history
-        )
-
-    # =========================================================
-    # CURRENT MESSAGE
-    # =========================================================
-
-    @staticmethod
-    def _get_current_lead_message(
-        conversation: Conversation,
-    ) -> ConversationMessage | None:
-
-        return conversation.last_lead_message
-
-    # =========================================================
-    # MESSAGE PERSISTENCE
-    # =========================================================
-
-    async def _persist_lead_message_if_needed(
+    async def _get_or_create_state(
         self,
         conversation_id: str,
-        message: ConversationMessage,
-        persisted_messages: list[dict[str, Any]],
-    ) -> None:
+    ) -> ConversationState:
 
-        if self._api_contains_message(
-            persisted_messages,
-            role="USER",
-            content=message.content,
-        ):
-            return
-
-        await self.api_client.create_message(
-            conversation_id=conversation_id,
-            role="USER",
-            content=message.content,
+        state = await self.state_repository.get(
+            conversation_id
         )
 
-    @staticmethod
-    def _api_contains_message(
-        messages: list[dict[str, Any]],
-        role: str,
-        content: str,
-    ) -> bool:
+        if state is not None:
+            return state
 
-        expected_content = content.strip()
+        return ConversationState(
+            conversation_id=conversation_id
+        )
 
-        for message in messages:
-
-            message_role = str(
-                message.get("role", "")
-            ).upper()
-
-            message_content = str(
-                message.get("content", "")
-            ).strip()
-
-            if (
-                message_role == role
-                and message_content == expected_content
-            ):
-                return True
-
-        return False
-
-    # =========================================================
-    # STATE UPDATE
-    # =========================================================
+    # ==================================================================
+    # LLM -> STATE
+    # ==================================================================
 
     def _update_state_from_llm(
         self,
         state: ConversationState,
-        response,
+        response: AIResponse,
     ) -> ConversationState:
 
-        metadata = response.metadata or {}
+        qualification = response.qualification or {}
 
-        # ---------------------------------------------------------
-        # O PromptBuilder atual retorna qualification dentro do
-        # JSON, mas o ResponseParser atual não preserva esse objeto
-        # no AIResponse.
-        #
-        # Por isso, o qualification deve ser recuperado do contexto
-        # quando necessário.
-        #
-        # Os campos que já existirem no state são preservados.
-        # ---------------------------------------------------------
+        # --------------------------------------------------------------
+        # Intent
+        # --------------------------------------------------------------
 
-        state = replace(
-            state,
+        intent = state.intent
 
-            intent=self._enum_value(
+        if response.intent is not None:
+            intent = self._enum_value(
                 response.intent
-            ) or state.intent,
+            )
 
-            qualification_score=(
+        # --------------------------------------------------------------
+        # Transaction type
+        # --------------------------------------------------------------
+
+        transaction_type = state.transaction_type
+
+        if response.transaction_type:
+            transaction_type = response.transaction_type
+
+        # --------------------------------------------------------------
+        # Flow
+        # --------------------------------------------------------------
+
+        flow = state.flow
+
+        if transaction_type == "buy":
+            flow = ConversationFlow.BUY
+
+        elif transaction_type == "investment":
+            flow = ConversationFlow.INVESTMENT
+
+        # --------------------------------------------------------------
+        # Qualification
+        # --------------------------------------------------------------
+
+        region = self._value_or_current(
+            qualification,
+            "region",
+            state.region,
+        )
+
+        budget = self._value_or_current(
+            qualification,
+            "budget",
+            state.budget,
+        )
+
+        bedrooms = self._value_or_current(
+            qualification,
+            "bedrooms",
+            state.bedrooms,
+        )
+
+        urgency = self._value_or_current(
+            qualification,
+            "urgency",
+            state.urgency,
+        )
+
+        property_type = self._value_or_current(
+            qualification,
+            "property_type",
+            state.property_type,
+        )
+
+        investor_profile = self._value_or_current(
+            qualification,
+            "investor_profile",
+            state.investor_profile,
+        )
+
+        investment_ticket = self._value_or_current(
+            qualification,
+            "investment_ticket",
+            state.investment_ticket,
+        )
+
+        expected_return = self._value_or_current(
+            qualification,
+            "expected_return",
+            state.expected_return,
+        )
+
+        # --------------------------------------------------------------
+        # Qualification score
+        # --------------------------------------------------------------
+
+        qualification_score = state.qualification_score
+
+        if response.qualification_score is not None:
+            qualification_score = (
                 response.qualification_score
-                if response.qualification_score is not None
-                else state.qualification_score
-            ),
-        )
-
-        # ---------------------------------------------------------
-        # transaction_type
-        #
-        # O ResponseParser não possui esse campo no AIResponse.
-        # Pode existir no metadata caso venha do parser/prompt.
-        # ---------------------------------------------------------
-
-        transaction_type = metadata.get(
-            "transaction_type"
-        )
-
-        if transaction_type:
-            state = replace(
-                state,
-                transaction_type=transaction_type,
             )
 
-        # ---------------------------------------------------------
-        # Property ID
-        # ---------------------------------------------------------
+        # --------------------------------------------------------------
+        # Selected property
+        # --------------------------------------------------------------
 
-        property_id = metadata.get(
-            "property_id"
+        selected_property_id = (
+            state.selected_property_id
         )
 
-        if property_id:
-            state = replace(
-                state,
-                selected_property_id=property_id,
+        if response.property_id:
+            selected_property_id = (
+                response.property_id
             )
 
-        # ---------------------------------------------------------
-        # Resolver fluxo
-        # ---------------------------------------------------------
-
-        flow = self._resolve_flow(
-            state
+        return self._replace_state(
+            state,
+            flow=flow,
+            intent=intent,
+            transaction_type=transaction_type,
+            property_type=property_type,
+            region=region,
+            budget=budget,
+            bedrooms=bedrooms,
+            urgency=urgency,
+            investor_profile=investor_profile,
+            investment_ticket=investment_ticket,
+            expected_return=expected_return,
+            qualification_score=qualification_score,
+            selected_property_id=selected_property_id,
         )
-
-        if flow is not None:
-            state = replace(
-                state,
-                flow=flow,
-            )
-
-        return state
-
-    # =========================================================
-    # FLOW
-    # =========================================================
 
     @staticmethod
-    def _resolve_flow(
-        state: ConversationState,
-    ) -> ConversationFlow | None:
+    def _value_or_current(
+        qualification: dict[str, Any],
+        key: str,
+        current_value: Any,
+    ) -> Any:
 
-        if state.flow is not None:
-            return state.flow
+        if key not in qualification:
+            return current_value
 
-        transaction_type = (
-            state.transaction_type or ""
-        ).strip().lower()
+        value = qualification[key]
 
-        intent = (
-            state.intent or ""
-        ).strip().lower()
+        if value is None:
+            return current_value
 
-        if transaction_type in {
-            "buy",
-            "purchase",
-            "compra",
-            "comprar",
-        }:
-            return ConversationFlow.BUY
+        if isinstance(value, str) and not value.strip():
+            return current_value
 
-        if transaction_type in {
-            "investment",
-            "investimento",
-            "invest",
-        }:
-            return ConversationFlow.INVESTMENT
+        return value
 
-        if intent in {
-            "property_interest",
-            "purchase",
-            "buy",
-            "compra",
-        }:
-            return ConversationFlow.BUY
-
-        if intent in {
-            "investment",
-            "investimento",
-        }:
-            return ConversationFlow.INVESTMENT
-
-        return None
-
-    # =========================================================
+    # ==================================================================
     # PROPERTY MATCHING
-    # =========================================================
+    # ==================================================================
 
-    def _match_properties(
-        self,
-        state: ConversationState,
-        properties: list[dict[str, Any]],
+    async def _match_properties(
+            self,
+            state: ConversationState,
     ) -> list[dict[str, Any]]:
 
-        matched = []
+        properties = await self.api_client.get_properties()
+
+        print("\n========== PROPERTY MATCH ==========")
+        print(f"Total properties: {len(properties)}")
+        print(f"property_type: {state.property_type}")
+        print(f"budget: {state.budget}")
+        print(f"bedrooms: {state.bedrooms}")
+        print(f"region: {state.region}")
+
+        matched: list[dict[str, Any]] = []
 
         for property_data in properties:
 
-            if not self._is_available(
-                property_data
-            ):
-                continue
+            property_id = property_data.get("id")
+            title = property_data.get("title")
 
-            if not self._matches_property_type(
-                state,
-                property_data,
-            ):
-                continue
-
-            if not self._matches_transaction_type(
-                state,
-                property_data,
-            ):
-                continue
-
-            if not self._matches_budget(
-                state,
-                property_data,
-            ):
-                continue
-
-            if not self._matches_bedrooms(
-                state,
-                property_data,
-            ):
-                continue
-
-            if not self._matches_region(
-                state,
-                property_data,
-            ):
-                continue
-
-            matched.append(
+            available = self._is_available(
                 property_data
             )
+
+            property_type = self._matches_property_type(
+                property_data,
+                state.property_type,
+            )
+
+            budget = self._matches_budget(
+                property_data,
+                state.budget,
+            )
+
+            bedrooms = self._matches_bedrooms(
+                property_data,
+                state.bedrooms,
+            )
+
+            region = self._matches_region(
+                property_data,
+                state.region,
+            )
+
+            print(
+                f"\nProperty: {title}"
+                f"\n  id: {property_id}"
+                f"\n  available: {available}"
+                f"\n  property_type: {property_type}"
+                f"\n  budget: {budget}"
+                f"\n  bedrooms: {bedrooms}"
+                f"\n  region: {region}"
+            )
+
+            if not available:
+                continue
+
+            if not property_type:
+                continue
+
+            if not budget:
+                continue
+
+            if not bedrooms:
+                continue
+
+            if not region:
+                continue
+
+            matched.append(property_data)
 
         matched.sort(
             key=self._property_price
         )
 
-        return matched[:3]
+        result = matched[:3]
+
+        print("\n========== MATCHED ==========")
+
+        for property_data in result:
+            print(
+                property_data.get("title"),
+                property_data.get("price"),
+            )
+
+        print("=============================\n")
+
+        return result
+
+    def _apply_property_match(
+        self,
+        state: ConversationState,
+        matched_properties: list[dict[str, Any]],
+    ) -> ConversationState:
+
+        if not matched_properties:
+            return state
+
+        property_id = self._property_id(
+            matched_properties[0]
+        )
+
+        if not property_id:
+            return state
+
+        return self._replace_state(
+            state,
+            selected_property_id=property_id,
+        )
+
+    # ==================================================================
+    # PROPERTY FILTERS
+    # ==================================================================
 
     @staticmethod
     def _is_available(
-        property_data: dict[str, Any],
+            property_data: dict[str, Any],
     ) -> bool:
+
+        status = property_data.get("status")
+
+        if status is not None:
+            return str(status).strip().upper() == "AVAILABLE"
 
         available = property_data.get(
-            "available"
+            "available",
+            True,
         )
 
-        if available is not None:
-            return bool(available)
+        if isinstance(available, str):
+            return available.strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "sim",
+            }
 
-        status = str(
-            property_data.get(
-                "status",
-                "",
-            )
-        ).upper()
-
-        return status in {
-            "AVAILABLE",
-            "ACTIVE",
-        }
+        return bool(available)
 
     def _matches_property_type(
-        self,
-        state: ConversationState,
-        property_data: dict[str, Any],
+            self,
+            property_data: dict[str, Any],
+            property_type: str | None,
     ) -> bool:
 
-        if not state.property_type:
+        if not property_type:
             return True
 
-        expected = self._normalize(
-            state.property_type
-        )
+        actual = property_data.get("property_type")
 
-        actual = self._normalize(
-            property_data.get(
-                "property_type",
-                "",
-            )
-        )
+        if actual is None:
+            actual = property_data.get("type")
 
         if not actual:
             return False
 
-        return (
-            expected in actual
-            or actual in expected
+        normalized_actual = self._normalize(
+            str(actual)
         )
 
-    def _matches_transaction_type(
-        self,
-        state: ConversationState,
-        property_data: dict[str, Any],
-    ) -> bool:
-
-        if not state.transaction_type:
-            return True
-
-        transaction = self._normalize(
-            state.transaction_type
+        normalized_requested = self._normalize(
+            property_type
         )
 
-        actual = self._normalize(
-            property_data.get(
-                "transaction_type",
-                "",
-            )
+        aliases = {
+            "apartamento": {
+                "apartamento",
+                "apartment",
+            },
+            "casa": {
+                "casa",
+                "house",
+            },
+            "terreno": {
+                "terreno",
+                "land",
+            },
+            "sala comercial": {
+                "sala comercial",
+                "commercial room",
+            },
+        }
+
+        allowed = aliases.get(
+            normalized_requested
         )
 
-        if not actual:
-            return True
+        if allowed:
+            return normalized_actual in allowed
 
-        if transaction in {
-            "buy",
-            "purchase",
-            "compra",
-            "comprar",
-        }:
-            return actual in {
-                "sale",
-                "venda",
-                "buy",
-                "compra",
-            }
-
-        return True
+        return normalized_actual == normalized_requested
 
     @staticmethod
     def _matches_budget(
-        state: ConversationState,
         property_data: dict[str, Any],
+        budget: float | None,
     ) -> bool:
 
-        if state.budget is None:
+        if budget is None:
             return True
 
-        price = AIService._property_price(
-            property_data
+        price = property_data.get(
+            "price"
         )
 
-        return price <= state.budget
-
-    @staticmethod
-    def _matches_bedrooms(
-        state: ConversationState,
-        property_data: dict[str, Any],
-    ) -> bool:
-
-        if state.bedrooms is None:
-            return True
-
-        bedrooms = property_data.get(
-            "bedrooms"
-        )
-
-        if bedrooms is None:
+        if price is None:
             return False
 
         try:
-            return (
-                int(bedrooms)
-                >= state.bedrooms
-            )
-        except (
-            TypeError,
-            ValueError,
-        ):
+            return float(price) <= float(budget)
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _matches_bedrooms(
+        property_data: dict[str, Any],
+        bedrooms: int | None,
+    ) -> bool:
+
+        if bedrooms is None:
+            return True
+
+        value = property_data.get(
+            "bedrooms"
+        )
+
+        if value is None:
+            return False
+
+        try:
+            return int(value) >= int(bedrooms)
+        except (TypeError, ValueError):
             return False
 
     def _matches_region(
         self,
-        state: ConversationState,
         property_data: dict[str, Any],
+        region: str | None,
     ) -> bool:
 
-        if not state.region:
+        if not region:
             return True
 
-        requested_region = self._normalize(
-            state.region
-        )
-
-        neighborhood = self._normalize(
-            property_data.get(
-                "neighborhood",
-                "",
-            )
+        normalized_region = self._normalize(
+            region
         )
 
         city = self._normalize(
-            property_data.get(
-                "city",
-                "",
+            str(
+                property_data.get(
+                    "city",
+                    "",
+                )
             )
         )
 
-        # ---------------------------------------------------------
-        # Zona Sul
-        # ---------------------------------------------------------
-
-        if "zona sul" in requested_region:
-
-            normalized_neighborhoods = {
-                self._normalize(
-                    item
+        neighborhood = self._normalize(
+            str(
+                property_data.get(
+                    "neighborhood",
+                    "",
                 )
-                for item
-                in self.SOUTH_ZONE_NEIGHBORHOODS
+            )
+        )
+
+        address = self._normalize(
+            str(
+                property_data.get(
+                    "address",
+                    "",
+                )
+            )
+        )
+
+        title = self._normalize(
+            str(
+                property_data.get(
+                    "title",
+                    "",
+                )
+            )
+        )
+
+        searchable = " ".join(
+            [
+                city,
+                neighborhood,
+                address,
+                title,
+            ]
+        )
+
+        if normalized_region in searchable:
+            return True
+
+        if normalized_region in {
+            "zona sul",
+            "sul",
+        }:
+
+            south_neighborhoods = {
+                "moema",
+                "vila mariana",
+                "saude",
+                "campo belo",
+                "campo grande",
+                "santo amaro",
+                "ipiranga",
+                "brooklin",
+                "morumbi",
+                "vila andrade",
+                "chacara flora",
             }
 
-            return (
-                neighborhood
-                in normalized_neighborhoods
+            normalized_neighborhood = (
+                self._normalize(
+                    neighborhood
+                )
             )
 
-        # ---------------------------------------------------------
-        # Bairro / cidade
-        # ---------------------------------------------------------
+            return normalized_neighborhood in {
+                self._normalize(
+                    neighborhood_name
+                )
+                for neighborhood_name
+                in south_neighborhoods
+            }
 
-        return (
-            requested_region in neighborhood
-            or requested_region in city
-            or neighborhood in requested_region
+        return False
+
+    # ==================================================================
+    # PROPERTY RECOMMENDATION
+    # ==================================================================
+
+    async def _generate_property_recommendation(
+        self,
+        lead: Any,
+        conversation: Conversation,
+        state: ConversationState,
+        properties: list[dict[str, Any]],
+    ) -> AIResponse:
+
+        prompt = self.prompt_builder.build(
+            lead=lead,
+            conversation=conversation,
+            properties=[],
+            matched_properties=properties,
+            state=state,
         )
 
-    # =========================================================
+        llm_response = await self.llm_provider.generate_response(
+            prompt
+        )
+
+        print("\n========== LLM RECOMMENDATION ==========")
+        print(llm_response)
+        print("=========================================\n")
+
+        return self.response_parser.parse(
+            llm_response
+        )
+
+    # ==================================================================
+    # NO PROPERTY RESPONSE
+    # ==================================================================
+
+    @staticmethod
+    def _build_no_property_response(
+        response: AIResponse,
+        state: ConversationState,
+    ) -> AIResponse:
+
+        message = (
+            "Não encontrei uma opção exatamente dentro "
+            "dos critérios informados. Podemos ajustar o "
+            "orçamento, a região ou a quantidade de quartos."
+        )
+
+        return AIResponse(
+            message=message,
+            intent=response.intent,
+            lead_status=response.lead_status,
+            qualification_score=response.qualification_score,
+            next_action=response.next_action,
+            reasoning=response.reasoning,
+            metadata=response.metadata,
+            transaction_type=response.transaction_type,
+            qualification=response.qualification,
+        )
+
+    # ==================================================================
+    # MESSAGE PERSISTENCE
+    # ==================================================================
+
+    async def _persist_lead_message_if_needed(
+        self,
+        conversation_id: str,
+        lead_message: Any,
+    ) -> None:
+
+        existing_messages = (
+            await self.api_client.get_messages(
+                conversation_id
+            )
+        )
+
+        for message in existing_messages:
+
+            role = str(
+                message.get(
+                    "role",
+                    "",
+                )
+            ).upper()
+
+            content = str(
+                message.get(
+                    "content",
+                    "",
+                )
+            )
+
+            if (
+                role == "USER"
+                and content.strip()
+                == lead_message.content.strip()
+            ):
+                return
+
+        await self.api_client.create_message(
+            conversation_id=conversation_id,
+            role="USER",
+            content=lead_message.content,
+        )
+
+    async def _persist_assistant_message(
+        self,
+        conversation_id: str,
+        response: AIResponse,
+    ) -> None:
+
+        await self.api_client.create_message(
+            conversation_id=conversation_id,
+            role="ASSISTANT",
+            content=response.message,
+        )
+
+    # ==================================================================
     # RESPONSE
-    # =========================================================
+    # ==================================================================
 
     def _build_response(
         self,
-        response,
         state: ConversationState,
+        response: AIResponse,
         matched_properties: list[dict[str, Any]],
     ) -> dict[str, Any]:
 
@@ -856,25 +897,21 @@ class AIService:
             ),
 
             "qualification_score": (
-                state.qualification_score
+                response.qualification_score
+                if response.qualification_score is not None
+                else state.qualification_score
             ),
 
-            "flow": (
-                state.flow.value
-                if state.flow
-                else None
+            "flow": self._enum_value(
+                state.flow
             ),
 
-            "state": (
-                state.state.value
-                if state.state
-                else None
+            "state": self._enum_value(
+                state.state
             ),
 
-            "next_action": (
-                state.next_action.value
-                if state.next_action
-                else None
+            "next_action": self._enum_value(
+                state.next_action
             ),
 
             "qualification": {
@@ -883,40 +920,33 @@ class AIService:
                 "bedrooms": state.bedrooms,
                 "urgency": state.urgency,
                 "property_type": state.property_type,
-                "investor_profile": (
-                    state.investor_profile
-                ),
-                "investment_ticket": (
-                    state.investment_ticket
-                ),
-                "expected_return": (
-                    state.expected_return
-                ),
+                "investor_profile": state.investor_profile,
+                "investment_ticket": state.investment_ticket,
+                "expected_return": state.expected_return,
             },
 
             "selected_property_id": (
                 state.selected_property_id
             ),
 
-            "matched_properties": (
-                matched_properties
-            ),
+            "matched_properties": matched_properties,
         }
 
-    # =========================================================
+    # ==================================================================
     # HELPERS
-    # =========================================================
+    # ==================================================================
 
     @staticmethod
-    def _enum_value(
-        value,
+    def _property_id(
+        property_data: dict[str, Any],
     ) -> str | None:
+
+        value = property_data.get(
+            "id"
+        )
 
         if value is None:
             return None
-
-        if hasattr(value, "value"):
-            return value.value
 
         return str(value)
 
@@ -926,36 +956,56 @@ class AIService:
     ) -> float:
 
         value = property_data.get(
-            "price"
+            "price",
+            0,
         )
-
-        if value is None:
-            return float("inf")
 
         try:
             return float(value)
-        except (
-            TypeError,
-            ValueError,
-        ):
-            return float("inf")
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def _normalize(
-        value: Any,
+        value: str,
     ) -> str:
 
-        if value is None:
-            return ""
+        import unicodedata
 
-        text = str(value).strip().lower()
+        normalized = unicodedata.normalize(
+            "NFD",
+            value.lower().strip(),
+        )
 
         return "".join(
-            char
-            for char in unicodedata.normalize(
-                "NFD",
-                text,
-            )
-            if unicodedata.category(char)
-            != "Mn"
+            character
+            for character in normalized
+            if unicodedata.category(character) != "Mn"
+        )
+
+    @staticmethod
+    def _enum_value(
+        value: Any,
+    ) -> Any:
+
+        if value is None:
+            return None
+
+        return getattr(
+            value,
+            "value",
+            value,
+        )
+
+    @staticmethod
+    def _replace_state(
+        state: ConversationState,
+        **changes: Any,
+    ) -> ConversationState:
+
+        from dataclasses import replace
+
+        return replace(
+            state,
+            **changes,
         )

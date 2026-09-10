@@ -1,33 +1,16 @@
 import json
 from typing import Any
 
-from ai.app.models.ai_response import (
-    AIResponse,
-    LeadIntent,
-    LeadStatus,
-)
+from ai.app.models.ai_response import AIResponse, LeadIntent, LeadStatus
 
 
 class ResponseParser:
     """
-    Converte a resposta textual produzida pelo LLM em AIResponse.
-
-    O parser aceita respostas JSON no formato atual do domínio e também
-    alguns aliases utilizados pelo prompt do agente.
+    Converte a resposta JSON produzida pelo LLM em um AIResponse
+    validado e tipado.
     """
 
-    def parse(
-        self,
-        response: str,
-    ) -> AIResponse:
-        """
-        Faz o parse da resposta do LLM.
-
-        Raises:
-            ValueError: quando a resposta não é um JSON válido ou
-                        contém dados incompatíveis com o domínio.
-        """
-
+    def parse(self, response: str) -> AIResponse:
         if not response or not response.strip():
             raise ValueError("LLM response cannot be empty")
 
@@ -35,78 +18,44 @@ class ResponseParser:
 
         return self._build_response(data)
 
-    # ============================================================
-    # JSON
-    # ============================================================
-
-    def _parse_json(
-        self,
-        response: str,
-    ) -> dict[str, Any]:
+    def _parse_json(self, response: str) -> dict[str, Any]:
         """
-        Converte a resposta textual em um dicionário.
+        Faz o parse do JSON retornado pelo LLM.
+
+        Aceita também respostas envolvidas em markdown fences:
+        ```json
+        {...}
+        ```
         """
 
-        cleaned_response = self._clean_response(response)
+        content = response.strip()
+
+        if content.startswith("```"):
+            lines = content.splitlines()
+
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+
+            content = "\n".join(lines).strip()
 
         try:
-            data = json.loads(cleaned_response)
-
+            data = json.loads(content)
         except json.JSONDecodeError as exc:
             raise ValueError(
-                "LLM response is not valid JSON"
+                f"Invalid JSON returned by LLM: {exc}"
             ) from exc
 
         if not isinstance(data, dict):
-            raise ValueError(
-                "LLM response must be a JSON object"
-            )
+            raise ValueError("LLM response must be a JSON object")
 
         return data
 
-    @staticmethod
-    def _clean_response(
-        response: str,
-    ) -> str:
+    def _build_response(self, data: dict[str, Any]) -> AIResponse:
         """
-        Remove blocos Markdown eventualmente retornados pelo LLM.
-
-        Aceita:
-
-            ```json
-            {...}
-            ```
-
-        e:
-
-            ```
-            {...}
-            ```
-        """
-
-        cleaned = response.strip()
-
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[len("```json"):]
-
-        elif cleaned.startswith("```"):
-            cleaned = cleaned[len("```"):]
-
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-
-        return cleaned.strip()
-
-    # ============================================================
-    # RESPONSE
-    # ============================================================
-
-    def _build_response(
-        self,
-        data: dict[str, Any],
-    ) -> AIResponse:
-        """
-        Constrói o AIResponse a partir do JSON retornado pelo LLM.
+        Constrói o AIResponse a partir do JSON normalizado.
         """
 
         message = self._required_string(
@@ -126,8 +75,6 @@ class ResponseParser:
             data.get("qualification_score")
         )
 
-        # Compatibilidade com o prompt antigo,
-        # que utiliza "lead_score" de 0 a 100.
         if qualification_score is None:
             lead_score = data.get("lead_score")
 
@@ -148,12 +95,18 @@ class ResponseParser:
             data.get("metadata")
         )
 
-        # Caso o LLM tenha retornado property_id,
-        # preservamos essa informação nos metadados.
         property_id = data.get("property_id")
 
         if property_id is not None:
             metadata["property_id"] = str(property_id)
+
+        transaction_type = self._parse_transaction_type(
+            data.get("transaction_type")
+        )
+
+        qualification = self._parse_qualification(
+            data.get("qualification")
+        )
 
         return AIResponse(
             message=message,
@@ -163,246 +116,375 @@ class ResponseParser:
             next_action=next_action,
             reasoning=reasoning,
             metadata=metadata,
+            transaction_type=transaction_type,
+            qualification=qualification,
         )
 
-    # ============================================================
-    # MESSAGE
-    # ============================================================
+    # ------------------------------------------------------------------
+    # Intent
+    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _required_string(
-        data: dict[str, Any],
-        field: str,
-    ) -> str:
-
-        value = data.get(field)
-
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(
-                f"required field '{field}' is missing or invalid"
-            )
-
-        return value.strip()
-
-    @staticmethod
-    def _optional_string(
-        value: Any,
-    ) -> str | None:
-
-        if value is None:
-            return None
-
-        if not isinstance(value, str):
-            raise ValueError(
-                "optional string field has invalid type"
-            )
-
-        value = value.strip()
-
-        return value or None
-
-    # ============================================================
-    # INTENT
-    # ============================================================
-
-    @staticmethod
     def _parse_intent(
+        self,
         value: Any,
     ) -> LeadIntent:
 
         if value is None:
             return LeadIntent.UNKNOWN
 
-        if not isinstance(value, str):
-            raise ValueError(
-                "intent must be a string"
-            )
+        normalized = str(value).strip().lower()
 
-        normalized = value.strip().lower()
-
-        # Valores nativos do domínio
-        try:
-            return LeadIntent(normalized)
-
-        except ValueError:
-            pass
-
-        # Aliases utilizados pelo LLM/prompt
         aliases = {
-            "buy": LeadIntent.PROPERTY_INTEREST,
-            "purchase": LeadIntent.PROPERTY_INTEREST,
-            "buying": LeadIntent.PROPERTY_INTEREST,
-
-            "rent": LeadIntent.PROPERTY_INTEREST,
-            "rental": LeadIntent.PROPERTY_INTEREST,
-            "renting": LeadIntent.PROPERTY_INTEREST,
-
-            "property_interest": LeadIntent.PROPERTY_INTEREST,
             "property": LeadIntent.PROPERTY_INTEREST,
+            "property_interest": LeadIntent.PROPERTY_INTEREST,
+            "imovel": LeadIntent.PROPERTY_INTEREST,
+            "interesse_imovel": LeadIntent.PROPERTY_INTEREST,
+            "interesse_em_imovel": LeadIntent.PROPERTY_INTEREST,
 
-            "information": LeadIntent.GENERAL_INQUIRY,
-            "info": LeadIntent.GENERAL_INQUIRY,
+            "general": LeadIntent.GENERAL_INQUIRY,
             "general_inquiry": LeadIntent.GENERAL_INQUIRY,
+            "duvida": LeadIntent.GENERAL_INQUIRY,
+            "informacao": LeadIntent.GENERAL_INQUIRY,
 
             "price": LeadIntent.PRICE_INQUIRY,
             "price_inquiry": LeadIntent.PRICE_INQUIRY,
+            "preco": LeadIntent.PRICE_INQUIRY,
+            "valor": LeadIntent.PRICE_INQUIRY,
 
-            "visit": LeadIntent.SCHEDULING,
             "schedule": LeadIntent.SCHEDULING,
             "scheduling": LeadIntent.SCHEDULING,
+            "agendamento": LeadIntent.SCHEDULING,
+            "meeting": LeadIntent.SCHEDULING,
 
             "negotiation": LeadIntent.NEGOTIATION,
+            "negociacao": LeadIntent.NEGOTIATION,
+            "negociação": LeadIntent.NEGOTIATION,
+
+            "unknown": LeadIntent.UNKNOWN,
         }
 
-        intent = aliases.get(normalized)
+        if normalized in aliases:
+            return aliases[normalized]
 
-        if intent is not None:
-            return intent
+        try:
+            return LeadIntent(normalized)
+        except ValueError:
+            return LeadIntent.UNKNOWN
 
-        raise ValueError(
-            f"invalid lead intent: {value}"
-        )
+    # ------------------------------------------------------------------
+    # Lead status
+    # ------------------------------------------------------------------
 
-    # ============================================================
-    # LEAD STATUS
-    # ============================================================
-
-    @staticmethod
     def _parse_lead_status(
+        self,
         value: Any,
     ) -> LeadStatus:
 
         if value is None:
             return LeadStatus.UNKNOWN
 
-        if not isinstance(value, str):
-            raise ValueError(
-                "lead_status must be a string"
-            )
+        normalized = str(value).strip().lower()
 
-        normalized = value.strip().lower()
-
-        # Valores nativos do domínio
-        try:
-            return LeadStatus(normalized)
-
-        except ValueError:
-            pass
-
-        # Status provenientes da API Go.
         aliases = {
+            "novo": LeadStatus.NEW,
             "new": LeadStatus.NEW,
 
-            "contacted": LeadStatus.QUALIFIED,
+            "contatado": LeadStatus.CONTACTED,
+            "contacted": LeadStatus.CONTACTED,
 
+            "qualificado": LeadStatus.QUALIFIED,
             "qualified": LeadStatus.QUALIFIED,
 
-            "in_negotiation": LeadStatus.IN_NEGOTIATION,
-            "negotiation": LeadStatus.IN_NEGOTIATION,
-
-            "scheduled": LeadStatus.SCHEDULED,
-
+            "convertido": LeadStatus.CONVERTED,
             "converted": LeadStatus.CONVERTED,
 
+            "perdido": LeadStatus.LOST,
             "lost": LeadStatus.LOST,
+
+            "unknown": LeadStatus.UNKNOWN,
         }
 
-        status = aliases.get(normalized)
+        if normalized in aliases:
+            return aliases[normalized]
 
-        if status is not None:
-            return status
+        try:
+            return LeadStatus(normalized)
+        except ValueError:
+            return LeadStatus.UNKNOWN
 
-        raise ValueError(
-            f"invalid lead status: {value}"
-        )
+    # ------------------------------------------------------------------
+    # Transaction type
+    # ------------------------------------------------------------------
 
-    # ============================================================
-    # SCORE
-    # ============================================================
-
-    @staticmethod
-    def _parse_score(
+    def _parse_transaction_type(
+        self,
         value: Any,
-    ) -> float | None:
+    ) -> str | None:
 
         if value is None:
             return None
 
-        if isinstance(value, bool):
-            raise ValueError(
-                "qualification_score must be a number"
-            )
+        normalized = str(value).strip().lower()
 
-        try:
-            score = float(value)
+        if not normalized:
+            return None
 
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "qualification_score must be a number"
-            ) from exc
+        aliases = {
+            "compra": "buy",
+            "comprar": "buy",
+            "buy": "buy",
 
-        if not 0.0 <= score <= 1.0:
-            raise ValueError(
-                "qualification_score must be between 0 and 1"
-            )
+            "investimento": "investment",
+            "investir": "investment",
+            "investment": "investment",
+        }
 
-        return score
+        return aliases.get(normalized, normalized)
 
-    @staticmethod
-    def _parse_lead_score(
+    # ------------------------------------------------------------------
+    # Qualification
+    # ------------------------------------------------------------------
+
+    def _parse_qualification(
+        self,
         value: Any,
-    ) -> float:
-
-        if isinstance(value, bool):
-            raise ValueError(
-                "lead_score must be a number"
-            )
-
-        try:
-            score = float(value)
-
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "lead_score must be a number"
-            ) from exc
-
-        if not 0.0 <= score <= 100.0:
-            raise ValueError(
-                "lead_score must be between 0 and 100"
-            )
-
-        # Converte 0-100 para 0-1,
-        # que é o formato utilizado pelo domínio.
-        return score / 100.0
-
-    # ============================================================
-    # METADATA
-    # ============================================================
-
-    @staticmethod
-    def _parse_metadata(
-        value: Any,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
 
         if value is None:
             return {}
 
         if not isinstance(value, dict):
             raise ValueError(
-                "metadata must be an object"
+                "qualification must be a JSON object"
             )
 
-        metadata: dict[str, str] = {}
+        qualification: dict[str, Any] = {}
 
-        for key, item in value.items():
+        # Região
+        region = value.get("region")
 
-            if not isinstance(key, str):
-                raise ValueError(
-                    "metadata keys must be strings"
-                )
+        if region is not None:
+            region = str(region).strip()
 
-            # Em vez de exigir que o LLM retorne somente strings,
-            # convertemos valores simples para string.
-            metadata[key] = str(item)
+            if region:
+                qualification["region"] = region
 
-        return metadata
+        # Orçamento
+        budget = self._parse_optional_float(
+            value.get("budget")
+        )
+
+        if budget is not None:
+            qualification["budget"] = budget
+
+        # Quartos
+        bedrooms = self._parse_optional_int(
+            value.get("bedrooms")
+        )
+
+        if bedrooms is not None:
+            qualification["bedrooms"] = bedrooms
+
+        # Urgência
+        urgency = value.get("urgency")
+
+        if urgency is not None:
+            urgency = str(urgency).strip()
+
+            if urgency:
+                qualification["urgency"] = urgency
+
+        # Tipo do imóvel
+        property_type = value.get("property_type")
+
+        if property_type is not None:
+            property_type = str(property_type).strip().lower()
+
+            if property_type:
+                qualification["property_type"] = property_type
+
+        # Perfil do investidor
+        investor_profile = value.get("investor_profile")
+
+        if investor_profile is not None:
+            investor_profile = str(
+                investor_profile
+            ).strip()
+
+            if investor_profile:
+                qualification["investor_profile"] = investor_profile
+
+        # Ticket de investimento
+        investment_ticket = self._parse_optional_float(
+            value.get("investment_ticket")
+        )
+
+        if investment_ticket is not None:
+            qualification["investment_ticket"] = investment_ticket
+
+        # Retorno esperado
+        expected_return = self._parse_optional_float(
+            value.get("expected_return")
+        )
+
+        if expected_return is not None:
+            qualification["expected_return"] = expected_return
+
+        return qualification
+
+    # ------------------------------------------------------------------
+    # Score
+    # ------------------------------------------------------------------
+
+    def _parse_score(
+        self,
+        value: Any,
+    ) -> float | None:
+
+        if value is None:
+            return None
+
+        try:
+            score = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "qualification_score must be numeric"
+            ) from exc
+
+        if score < 0 or score > 1:
+            raise ValueError(
+                "qualification_score must be between 0 and 1"
+            )
+
+        return score
+
+    def _parse_lead_score(
+        self,
+        value: Any,
+    ) -> float | None:
+
+        if value is None:
+            return None
+
+        try:
+            score = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "lead_score must be numeric"
+            ) from exc
+
+        # Alguns prompts podem retornar score em escala 0-100.
+        if score > 1:
+            score = score / 100.0
+
+        if score < 0 or score > 1:
+            raise ValueError(
+                "lead_score must be between 0 and 100"
+            )
+
+        return score
+
+    # ------------------------------------------------------------------
+    # Metadata
+    # ------------------------------------------------------------------
+
+    def _parse_metadata(
+        self,
+        value: Any,
+    ) -> dict[str, Any]:
+
+        if value is None:
+            return {}
+
+        if not isinstance(value, dict):
+            raise ValueError(
+                "metadata must be a JSON object"
+            )
+
+        return dict(value)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _required_string(
+        self,
+        data: dict[str, Any],
+        field_name: str,
+    ) -> str:
+
+        value = data.get(field_name)
+
+        if value is None:
+            raise ValueError(
+                f"Required field '{field_name}' is missing"
+            )
+
+        value = str(value).strip()
+
+        if not value:
+            raise ValueError(
+                f"Required field '{field_name}' cannot be empty"
+            )
+
+        return value
+
+    def _optional_string(
+        self,
+        value: Any,
+    ) -> str | None:
+
+        if value is None:
+            return None
+
+        value = str(value).strip()
+
+        return value if value else None
+
+    def _parse_optional_float(
+        self,
+        value: Any,
+    ) -> float | None:
+
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            value = value.strip()
+
+            if not value:
+                return None
+
+            # Aceita valores simples como:
+            # "800000"
+            # "800000.50"
+            # "800 mil" não é convertido aqui de propósito.
+            value = value.replace(",", ".")
+
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Expected numeric value, received: {value}"
+            ) from exc
+
+    def _parse_optional_int(
+        self,
+        value: Any,
+    ) -> int | None:
+
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            value = value.strip()
+
+            if not value:
+                return None
+
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Expected integer value, received: {value}"
+            ) from exc
