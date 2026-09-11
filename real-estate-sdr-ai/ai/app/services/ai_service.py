@@ -362,6 +362,21 @@ class AIService:
         )
 
         # --------------------------------------------------------------
+        # Consistência entre fluxo e campos financeiros
+        # --------------------------------------------------------------
+        # "budget" pertence ao fluxo de compra.
+        # "investment_ticket" pertence ao fluxo de investimento.
+        #
+        # O LLM pode interpretar corretamente o valor e ainda assim
+        # preencher os dois campos. A aplicação é a autoridade final
+        # sobre o estado, portanto removemos a ambiguidade aqui.
+        if flow == ConversationFlow.INVESTMENT:
+            budget = None
+
+        elif flow == ConversationFlow.BUY:
+            investment_ticket = None
+
+        # --------------------------------------------------------------
         # Qualification score
         # --------------------------------------------------------------
 

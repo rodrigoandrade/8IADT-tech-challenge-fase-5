@@ -442,10 +442,9 @@ class ResponseParser:
         return value if value else None
 
     def _parse_optional_float(
-        self,
-        value: Any,
+            self,
+            value: Any,
     ) -> float | None:
-
         if value is None:
             return None
 
@@ -455,10 +454,15 @@ class ResponseParser:
             if not value:
                 return None
 
-            # Aceita valores simples como:
-            # "800000"
-            # "800000.50"
-            # "800 mil" não é convertido aqui de propósito.
+            # Aceita percentuais:
+            # "8%"   -> 8.0
+            # "8 %"  -> 8.0
+            # "8,5%" -> 8.5
+            is_percentage = value.endswith("%")
+
+            if is_percentage:
+                value = value[:-1].strip()
+
             value = value.replace(",", ".")
 
         try:

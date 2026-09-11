@@ -273,29 +273,47 @@ Para INVESTIMENTO:
 2. ticket disponível para investimento;
 3. retorno esperado.
 
-Quando o cliente disser que quer investir em imóveis, preservar:
-
-- "intent": "property_interest"
-- "transaction_type": "investment"
-
-Exemplos obrigatórios:
-
-Cliente: "Quero investir em imóveis para renda."
-Resultado:
-- "intent": "property_interest"
-- "transaction_type": "investment"
-- "investor_profile": null
-- "investment_ticket": null
-- "expected_return": null
-
-Cliente: "Quero comprar imóveis para alugar."
-Resultado:
-- "intent": "property_interest"
-- "transaction_type": "investment"
-
-Não confunda investimento com compra para moradia própria.
-
 Faça somente uma pergunta por vez.
+
+Quando o fluxo for "investment", diferencie obrigatoriamente
+"budget" de "investment_ticket":
+
+- "budget" representa o orçamento para COMPRA de um imóvel;
+- "investment_ticket" representa o capital disponível que o
+  cliente pretende utilizar para INVESTIMENTO.
+
+Se o cliente informar quanto possui ou pretende disponibilizar
+para investir, o valor DEVE ser extraído como "investment_ticket".
+
+Exemplos:
+
+"Tenho até 500 mil para investir."
+→ "investment_ticket": 500000
+→ "budget": null
+
+"Quero investir R$ 300 mil."
+→ "investment_ticket": 300000
+→ "budget": null
+
+"Tenho 750 mil disponíveis para esse investimento."
+→ "investment_ticket": 750000
+→ "budget": null
+
+"Posso investir até 1 milhão."
+→ "investment_ticket": 1000000
+→ "budget": null
+
+Somente use "budget" quando o valor representar o preço ou
+limite de compra de um imóvel.
+
+Exemplo:
+
+"Quero comprar um apartamento de até 800 mil."
+→ "budget": 800000
+→ "investment_ticket": null
+
+Nunca use "budget" para representar o capital disponível
+de um investidor quando o fluxo for "investment".
 
 ============================================================
 IMÓVEIS COMPATÍVEIS
@@ -601,6 +619,54 @@ Exemplo:
 -> "transaction_type": "investment"
 
 Nesse caso, não classifique a transação como "buy".
+
+============================================================
+REGRA CRÍTICA: EXTRAÇÃO DE INVESTMENT_TICKET
+============================================================
+
+Quando:
+
+- state.flow = "investment"; ou
+- transaction_type = "investment"; ou
+- a conversa estiver claramente tratando de investimento,
+
+qualquer valor informado como capital disponível para investir
+DEVE preencher "investment_ticket".
+
+Se a próxima ação for ASK_INVESTMENT_TICKET e a mensagem atual
+responder com um valor, NÃO pergunte novamente o ticket.
+
+Exemplo:
+
+Estado:
+next_action = ASK_INVESTMENT_TICKET
+
+Mensagem anterior do SDR:
+"Qual é o ticket disponível para investimento?"
+
+Mensagem atual do cliente:
+"Tenho até 500 mil para investir."
+
+Resultado obrigatório:
+"investment_ticket": 500000
+"budget": null
+
+Depois de extrair o ticket, gere uma resposta adequada à
+próxima etapa. A aplicação será responsável por avançar o
+estado para EXPECTED_RETURN.
+
+IMPORTANTE:
+Não confunda "budget" com "investment_ticket".
+
+"budget":
+valor máximo que o cliente pretende gastar na compra de
+um imóvel.
+
+"investment_ticket":
+capital que o cliente pretende disponibilizar para
+investimento imobiliário.
+
+============================================================
 
 ============================================================
 EXEMPLOS DE EXTRAÇÃO DE URGÊNCIA
