@@ -3,6 +3,7 @@ from typing import Any
 from ai.app.agent.state import (
     ConversationFlow,
     ConversationState,
+    ConversationStateType,
     NextAction,
 )
 from ai.app.agent.state_machine import ConversationStateMachine
@@ -93,9 +94,13 @@ class AIService:
         # 2. Recuperar ou criar estado
         # ==============================================================
 
-        state = await self._get_or_create_state(
-            conversation_id
-        )
+        state = await self._get_or_create_state(conversation.id)
+
+        if (
+                state.state == ConversationStateType.WAITING_LEAD
+                and state.previous_state is not None
+        ):
+            state = self.state_machine.resume_after_follow_up(state)
 
         # ==============================================================
         # 3. Persistir mensagem do lead

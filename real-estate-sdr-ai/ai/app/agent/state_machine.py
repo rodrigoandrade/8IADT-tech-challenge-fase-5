@@ -309,13 +309,14 @@ class ConversationStateMachine:
     # ============================================================
 
     def enter_follow_up(
-        self,
-        state: ConversationState,
+            self,
+            state: ConversationState,
     ) -> ConversationState:
 
         return replace(
             state,
             previous_state=state.state,
+            previous_next_action=state.next_action,
             state=ConversationStateType.WAITING_LEAD,
             next_action=None,
             waiting_for_customer=True,
@@ -335,7 +336,8 @@ class ConversationStateMachine:
             state,
             state=previous_state,
             previous_state=None,
-            next_action=None,
+            next_action=state.previous_next_action,
+            previous_next_action=None,
             waiting_for_customer=False,
         )
 

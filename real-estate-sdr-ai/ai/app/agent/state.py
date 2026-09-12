@@ -103,6 +103,7 @@ class ConversationState:
 
     # Guarda o estado comercial antes de entrar em follow-up.
     previous_state: Optional[ConversationStateType] = None
+    previous_next_action: Optional[NextAction] = None
 
     # INTENT
     intent: Optional[str] = None
