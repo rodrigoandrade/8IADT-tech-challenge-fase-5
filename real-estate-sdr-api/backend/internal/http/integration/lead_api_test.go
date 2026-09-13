@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"real-estate-sdr/internal/application"
 	web "real-estate-sdr/internal/http"
+	"real-estate-sdr/internal/infrastructure/ai"
 	"real-estate-sdr/internal/infrastructure/postgres"
 	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
 	"testing"
@@ -711,8 +713,17 @@ func newTestRouter(
 		queries,
 	)
 
+	aiServiceURL := os.Getenv("AI_SERVICE_URL")
+	if aiServiceURL == "" {
+		log.Fatal("AI_SERVICE_URL is not configured")
+	}
+
+	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+
 	messageService := application.NewMessageService(
 		messageRepository,
+		conversationRepository,
+		aiService,
 	)
 
 	return web.NewRouter(

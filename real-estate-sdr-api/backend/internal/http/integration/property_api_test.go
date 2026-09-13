@@ -3,10 +3,12 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"real-estate-sdr/internal/infrastructure/ai"
 	"testing"
 	"time"
 
@@ -863,8 +865,17 @@ func newPropertyTestRouter(
 		queries,
 	)
 
+	aiServiceURL := os.Getenv("AI_SERVICE_URL")
+	if aiServiceURL == "" {
+		log.Fatal("AI_SERVICE_URL is not configured")
+	}
+
+	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+
 	messageService := application.NewMessageService(
 		messageRepository,
+		conversationRepository,
+		aiService,
 	)
 
 	return web.NewRouter(

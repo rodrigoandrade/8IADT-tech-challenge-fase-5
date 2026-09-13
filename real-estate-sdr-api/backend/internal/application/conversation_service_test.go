@@ -7,9 +7,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"real-estate-sdr/internal/domain"
 )
+
+// ============================================================
+// CONVERSATION REPOSITORY MOCK
+// ============================================================
 
 type conversationRepositoryMock struct {
 	createFunc      func(context.Context, *domain.Conversation) (*domain.Conversation, error)
@@ -86,6 +91,10 @@ func (m *conversationRepositoryMock) Count(
 	return 0, errors.New("count not configured")
 }
 
+// ============================================================
+// HELPERS
+// ============================================================
+
 func validConversationForServiceTest() *domain.Conversation {
 	return &domain.Conversation{
 		ID:        uuid.New(),
@@ -94,6 +103,10 @@ func validConversationForServiceTest() *domain.Conversation {
 		StartedAt: time.Now(),
 	}
 }
+
+// ============================================================
+// CREATE
+// ============================================================
 
 func TestConversationService_Create(t *testing.T) {
 	conversation := validConversationForServiceTest()
@@ -106,7 +119,6 @@ func TestConversationService_Create(t *testing.T) {
 			input *domain.Conversation,
 		) (*domain.Conversation, error) {
 			received = input
-
 			return input, nil
 		},
 	}
@@ -117,6 +129,7 @@ func TestConversationService_Create(t *testing.T) {
 		context.Background(),
 		conversation,
 	)
+
 	if err != nil {
 		t.Fatalf(
 			"expected no error, got %v",
@@ -126,13 +139,13 @@ func TestConversationService_Create(t *testing.T) {
 
 	if result != conversation {
 		t.Fatal(
-			"expected returned conversation to be the repository result",
+			"expected returned conversation to be repository result",
 		)
 	}
 
 	if received != conversation {
 		t.Fatal(
-			"expected repository to receive the same conversation",
+			"expected repository to receive same conversation",
 		)
 	}
 }
@@ -164,6 +177,7 @@ func TestConversationService_Create_NilConversation(t *testing.T) {
 
 func TestConversationService_Create_InvalidConversation(t *testing.T) {
 	conversation := validConversationForServiceTest()
+
 	conversation.LeadID = uuid.Nil
 
 	repositoryCalled := false
@@ -196,11 +210,13 @@ func TestConversationService_Create_InvalidConversation(t *testing.T) {
 		t.Fatal("expected validation error, got nil")
 	}
 
-	if repositoryCalled {
-		t.Fatal(
-			"repository should not be called for invalid conversation",
-		)
+	if !repositoryCalled {
+		return
 	}
+
+	t.Fatal(
+		"repository should not be called for invalid conversation",
+	)
 }
 
 func TestConversationService_Create_RepositoryError(t *testing.T) {
@@ -239,8 +255,13 @@ func TestConversationService_Create_RepositoryError(t *testing.T) {
 	}
 }
 
+// ============================================================
+// GET BY ID
+// ============================================================
+
 func TestConversationService_GetByID(t *testing.T) {
 	id := uuid.New()
+
 	conversation := validConversationForServiceTest()
 	conversation.ID = id
 
@@ -313,20 +334,20 @@ func TestConversationService_GetByID_InvalidID(t *testing.T) {
 	}
 
 	if err == nil {
-		t.Fatal("expected invalid ID error, got nil")
+		t.Fatal(
+			"expected invalid ID error, got nil",
+		)
 	}
 
-	if !repositoryCalled {
-		return
+	if repositoryCalled {
+		t.Fatal(
+			"repository should not be called with invalid ID",
+		)
 	}
-
-	t.Fatal(
-		"repository should not be called with invalid ID",
-	)
 }
 
 func TestConversationService_GetByID_RepositoryError(t *testing.T) {
-	expectedErr := errors.New("conversation not found")
+	expectedErr := errors.New("repository error")
 
 	repository := &conversationRepositoryMock{
 		getByIDFunc: func(
@@ -351,6 +372,42 @@ func TestConversationService_GetByID_RepositoryError(t *testing.T) {
 		)
 	}
 }
+
+func TestConversationService_GetByID_NotFound(t *testing.T) {
+	repository := &conversationRepositoryMock{
+		getByIDFunc: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+			return nil, pgx.ErrNoRows
+		},
+	}
+
+	service := NewConversationService(repository)
+
+	result, err := service.GetByID(
+		context.Background(),
+		uuid.New(),
+	)
+
+	if result != nil {
+		t.Fatalf(
+			"expected nil result, got %v",
+			result,
+		)
+	}
+
+	if !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf(
+			"expected ErrConversationNotFound, got %v",
+			err,
+		)
+	}
+}
+
+// ============================================================
+// GET BY LEAD ID
+// ============================================================
 
 func TestConversationService_GetByLeadID(t *testing.T) {
 	leadID := uuid.New()
@@ -431,7 +488,9 @@ func TestConversationService_GetByLeadID_InvalidID(t *testing.T) {
 	}
 
 	if err == nil {
-		t.Fatal("expected invalid lead ID error, got nil")
+		t.Fatal(
+			"expected invalid lead ID error, got nil",
+		)
 	}
 
 	if repositoryCalled {
@@ -467,6 +526,10 @@ func TestConversationService_GetByLeadID_RepositoryError(t *testing.T) {
 		)
 	}
 }
+
+// ============================================================
+// LIST
+// ============================================================
 
 func TestConversationService_List(t *testing.T) {
 	conversations := []*domain.Conversation{
@@ -528,7 +591,7 @@ func TestConversationService_List(t *testing.T) {
 	}
 }
 
-func TestConversationService_List_DefaultLimit(t *testing.T) {
+func TestConversationService_List_DefaultPagination(t *testing.T) {
 	var receivedLimit int
 	var receivedOffset int
 
@@ -604,10 +667,97 @@ func TestConversationService_List_RepositoryError(t *testing.T) {
 	}
 }
 
+// ============================================================
+// CLOSE
+// ============================================================
+
+func TestConversationService_Close(t *testing.T) {
+	id := uuid.New()
+
+	conversation := validConversationForServiceTest()
+	conversation.ID = id
+
+	closedConversation := *conversation
+
+	now := time.Now()
+
+	closedConversation.Status = domain.ConversationStatusClosed
+	closedConversation.EndedAt = &now
+
+	var receivedGetID uuid.UUID
+	var receivedCloseID uuid.UUID
+
+	repository := &conversationRepositoryMock{
+		getByIDFunc: func(
+			ctx context.Context,
+			inputID uuid.UUID,
+		) (*domain.Conversation, error) {
+
+			receivedGetID = inputID
+
+			return conversation, nil
+		},
+
+		closeFunc: func(
+			ctx context.Context,
+			inputID uuid.UUID,
+		) (*domain.Conversation, error) {
+
+			receivedCloseID = inputID
+
+			return &closedConversation, nil
+		},
+	}
+
+	service := NewConversationService(repository)
+
+	result, err := service.Close(
+		context.Background(),
+		id,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
+		)
+	}
+
+	if result != &closedConversation {
+		t.Fatal(
+			"expected returned closed conversation",
+		)
+	}
+
+	if receivedGetID != id {
+		t.Fatalf(
+			"expected GetByID ID %s, got %s",
+			id,
+			receivedGetID,
+		)
+	}
+
+	if receivedCloseID != id {
+		t.Fatalf(
+			"expected Close ID %s, got %s",
+			id,
+			receivedCloseID,
+		)
+	}
+}
+
 func TestConversationService_Close_InvalidID(t *testing.T) {
 	repositoryCalled := false
 
 	repository := &conversationRepositoryMock{
+		getByIDFunc: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+			repositoryCalled = true
+			return nil, nil
+		},
+
 		closeFunc: func(
 			ctx context.Context,
 			id uuid.UUID,
@@ -632,7 +782,9 @@ func TestConversationService_Close_InvalidID(t *testing.T) {
 	}
 
 	if err == nil {
-		t.Fatal("expected invalid conversation ID error, got nil")
+		t.Fatal(
+			"expected invalid conversation ID error",
+		)
 	}
 
 	if repositoryCalled {
@@ -642,36 +794,122 @@ func TestConversationService_Close_InvalidID(t *testing.T) {
 	}
 }
 
-func TestConversationService_Close(t *testing.T) {
+func TestConversationService_Close_NotFound(t *testing.T) {
+	repository := &conversationRepositoryMock{
+		getByIDFunc: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+			return nil, pgx.ErrNoRows
+		},
+
+		closeFunc: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+			t.Fatal(
+				"Close should not be called when conversation does not exist",
+			)
+
+			return nil, nil
+		},
+	}
+
+	service := NewConversationService(repository)
+
+	result, err := service.Close(
+		context.Background(),
+		uuid.New(),
+	)
+
+	if result != nil {
+		t.Fatalf(
+			"expected nil result, got %v",
+			result,
+		)
+	}
+
+	if !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf(
+			"expected ErrConversationNotFound, got %v",
+			err,
+		)
+	}
+}
+
+func TestConversationService_Close_GetByIDError(t *testing.T) {
+	expectedErr := errors.New("database unavailable")
+
+	repository := &conversationRepositoryMock{
+		getByIDFunc: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+			return nil, expectedErr
+		},
+
+		closeFunc: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+			t.Fatal(
+				"Close should not be called when GetByID fails",
+			)
+
+			return nil, nil
+		},
+	}
+
+	service := NewConversationService(repository)
+
+	result, err := service.Close(
+		context.Background(),
+		uuid.New(),
+	)
+
+	if result != nil {
+		t.Fatalf(
+			"expected nil result, got %v",
+			result,
+		)
+	}
+
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf(
+			"expected repository error, got %v",
+			err,
+		)
+	}
+}
+
+func TestConversationService_Close_AlreadyClosed(t *testing.T) {
 	id := uuid.New()
 
-	conversation := validConversationForServiceTest()
-	conversation.ID = id
-
 	now := time.Now()
+
+	conversation := validConversationForServiceTest()
+
+	conversation.ID = id
 	conversation.Status = domain.ConversationStatusClosed
 	conversation.EndedAt = &now
-
-	var receivedID uuid.UUID
 
 	repository := &conversationRepositoryMock{
 		getByIDFunc: func(
 			ctx context.Context,
 			inputID uuid.UUID,
 		) (*domain.Conversation, error) {
-			return &domain.Conversation{
-				ID:     inputID,
-				LeadID: uuid.New(),
-				Status: domain.ConversationStatusActive,
-			}, nil
+			return conversation, nil
 		},
 
 		closeFunc: func(
 			ctx context.Context,
 			inputID uuid.UUID,
 		) (*domain.Conversation, error) {
-			receivedID = inputID
-			return conversation, nil
+			t.Fatal(
+				"Close should not be called for already closed conversation",
+			)
+
+			return nil, nil
 		},
 	}
 
@@ -682,41 +920,35 @@ func TestConversationService_Close(t *testing.T) {
 		id,
 	)
 
-	if err != nil {
+	if result != nil {
 		t.Fatalf(
-			"expected no error, got %v",
+			"expected nil result, got %v",
+			result,
+		)
+	}
+
+	if !errors.Is(err, ErrConversationAlreadyClosed) {
+		t.Fatalf(
+			"expected ErrConversationAlreadyClosed, got %v",
 			err,
-		)
-	}
-
-	if result != conversation {
-		t.Fatal(
-			"expected returned conversation from repository",
-		)
-	}
-
-	if receivedID != id {
-		t.Fatalf(
-			"expected ID %s, got %s",
-			id,
-			receivedID,
 		)
 	}
 }
 
 func TestConversationService_Close_RepositoryError(t *testing.T) {
-	expectedErr := errors.New("conversation already closed")
+	id := uuid.New()
+
+	conversation := validConversationForServiceTest()
+	conversation.ID = id
+
+	expectedErr := errors.New("close repository error")
 
 	repository := &conversationRepositoryMock{
 		getByIDFunc: func(
 			ctx context.Context,
 			inputID uuid.UUID,
 		) (*domain.Conversation, error) {
-			return &domain.Conversation{
-				ID:     inputID,
-				LeadID: uuid.New(),
-				Status: domain.ConversationStatusActive,
-			}, nil
+			return conversation, nil
 		},
 
 		closeFunc: func(
@@ -729,10 +961,17 @@ func TestConversationService_Close_RepositoryError(t *testing.T) {
 
 	service := NewConversationService(repository)
 
-	_, err := service.Close(
+	result, err := service.Close(
 		context.Background(),
-		uuid.New(),
+		id,
 	)
+
+	if result != nil {
+		t.Fatalf(
+			"expected nil result, got %v",
+			result,
+		)
+	}
 
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf(
@@ -741,6 +980,54 @@ func TestConversationService_Close_RepositoryError(t *testing.T) {
 		)
 	}
 }
+
+func TestConversationService_Close_RaceAlreadyClosed(t *testing.T) {
+	id := uuid.New()
+
+	conversation := validConversationForServiceTest()
+	conversation.ID = id
+
+	repository := &conversationRepositoryMock{
+		getByIDFunc: func(
+			ctx context.Context,
+			inputID uuid.UUID,
+		) (*domain.Conversation, error) {
+			return conversation, nil
+		},
+
+		closeFunc: func(
+			ctx context.Context,
+			inputID uuid.UUID,
+		) (*domain.Conversation, error) {
+			return nil, pgx.ErrNoRows
+		},
+	}
+
+	service := NewConversationService(repository)
+
+	result, err := service.Close(
+		context.Background(),
+		id,
+	)
+
+	if result != nil {
+		t.Fatalf(
+			"expected nil result, got %v",
+			result,
+		)
+	}
+
+	if !errors.Is(err, ErrConversationAlreadyClosed) {
+		t.Fatalf(
+			"expected ErrConversationAlreadyClosed, got %v",
+			err,
+		)
+	}
+}
+
+// ============================================================
+// COUNT
+// ============================================================
 
 func TestConversationService_Count(t *testing.T) {
 	repository := &conversationRepositoryMock{

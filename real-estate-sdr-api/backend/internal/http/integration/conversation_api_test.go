@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"real-estate-sdr/internal/infrastructure/ai"
 	"testing"
 
 	"github.com/google/uuid"
@@ -77,8 +79,17 @@ func setupConversationTestServer(
 		queries,
 	)
 
+	aiServiceURL := os.Getenv("AI_SERVICE_URL")
+	if aiServiceURL == "" {
+		log.Fatal("AI_SERVICE_URL is not configured")
+	}
+
+	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+
 	messageService := application.NewMessageService(
 		messageRepository,
+		conversationRepository,
+		aiService,
 	)
 
 	router := web.NewRouter(

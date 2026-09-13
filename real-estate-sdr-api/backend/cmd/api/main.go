@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"real-estate-sdr/internal/infrastructure/ai"
 	"syscall"
 	"time"
 
@@ -101,8 +102,17 @@ func main() {
 		conversationRepository,
 	)
 
+	aiServiceURL := os.Getenv("AI_SERVICE_URL")
+	if aiServiceURL == "" {
+		log.Fatal("AI_SERVICE_URL is not configured")
+	}
+
+	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+
 	messageService := application.NewMessageService(
 		messageRepository,
+		conversationRepository,
+		aiService,
 	)
 
 	// =========================================================

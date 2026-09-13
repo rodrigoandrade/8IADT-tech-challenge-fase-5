@@ -92,7 +92,11 @@ func (m *messageRepositoryMock) CountByConversation(
 func newTestMessageService(
 	repository *messageRepositoryMock,
 ) *application.MessageService {
-	return application.NewMessageService(repository)
+	return application.NewMessageService(
+		repository,
+		nil,
+		nil,
+	)
 }
 
 func newTestMessage() *domain.Message {

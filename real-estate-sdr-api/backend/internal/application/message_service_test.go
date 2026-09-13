@@ -1,4 +1,4 @@
-package application
+package application_test
 
 import (
 	"context"
@@ -7,10 +7,18 @@ import (
 
 	"github.com/google/uuid"
 
+	"real-estate-sdr/internal/application"
 	"real-estate-sdr/internal/domain"
+	"real-estate-sdr/internal/repository"
 )
 
-type messageRepositoryMock struct {
+// ============================================================
+// MESSAGE REPOSITORY MOCK
+// ============================================================
+
+type testMessageRepository struct {
+	repository.MessageRepository
+
 	createFn              func(context.Context, *domain.Message) (*domain.Message, error)
 	getByIDFn             func(context.Context, uuid.UUID) (*domain.Message, error)
 	listFn                func(context.Context, int, int) ([]*domain.Message, error)
@@ -19,7 +27,7 @@ type messageRepositoryMock struct {
 	countByConversationFn func(context.Context, uuid.UUID) (int64, error)
 }
 
-func (m *messageRepositoryMock) Create(
+func (m *testMessageRepository) Create(
 	ctx context.Context,
 	message *domain.Message,
 ) (*domain.Message, error) {
@@ -30,7 +38,7 @@ func (m *messageRepositoryMock) Create(
 	return nil, errors.New("create not configured")
 }
 
-func (m *messageRepositoryMock) GetByID(
+func (m *testMessageRepository) GetByID(
 	ctx context.Context,
 	id uuid.UUID,
 ) (*domain.Message, error) {
@@ -41,7 +49,7 @@ func (m *messageRepositoryMock) GetByID(
 	return nil, errors.New("get by id not configured")
 }
 
-func (m *messageRepositoryMock) List(
+func (m *testMessageRepository) List(
 	ctx context.Context,
 	limit int,
 	offset int,
@@ -53,7 +61,7 @@ func (m *messageRepositoryMock) List(
 	return nil, errors.New("list not configured")
 }
 
-func (m *messageRepositoryMock) ListByConversation(
+func (m *testMessageRepository) ListByConversation(
 	ctx context.Context,
 	conversationID uuid.UUID,
 ) ([]*domain.Message, error) {
@@ -64,7 +72,7 @@ func (m *messageRepositoryMock) ListByConversation(
 	return nil, errors.New("list by conversation not configured")
 }
 
-func (m *messageRepositoryMock) Count(
+func (m *testMessageRepository) Count(
 	ctx context.Context,
 ) (int64, error) {
 	if m.countFn != nil {
@@ -74,7 +82,7 @@ func (m *messageRepositoryMock) Count(
 	return 0, errors.New("count not configured")
 }
 
-func (m *messageRepositoryMock) CountByConversation(
+func (m *testMessageRepository) CountByConversation(
 	ctx context.Context,
 	conversationID uuid.UUID,
 ) (int64, error) {
@@ -85,605 +93,1297 @@ func (m *messageRepositoryMock) CountByConversation(
 	return 0, errors.New("count by conversation not configured")
 }
 
-func newTestMessage() *domain.Message {
+// ============================================================
+// CONVERSATION REPOSITORY MOCK
+// ============================================================
+
+type testConversationRepository struct {
+	repository.ConversationRepository
+
+	getByIDFn func(
+		context.Context,
+		uuid.UUID,
+	) (*domain.Conversation, error)
+}
+
+func (m *testConversationRepository) GetByID(
+	ctx context.Context,
+	id uuid.UUID,
+) (*domain.Conversation, error) {
+	if m.getByIDFn != nil {
+		return m.getByIDFn(ctx, id)
+	}
+
+	return nil, errors.New("get conversation by id not configured")
+}
+
+// ============================================================
+// AI SERVICE MOCK
+// ============================================================
+
+type testAIService struct {
+	generateResponseFn func(
+		context.Context,
+		*domain.Conversation,
+		[]*domain.Message,
+	) (*domain.AIResponse, error)
+}
+
+func (m *testAIService) GenerateResponse(
+	ctx context.Context,
+	conversation *domain.Conversation,
+	messages []*domain.Message,
+) (*domain.AIResponse, error) {
+	if m.generateResponseFn != nil {
+		return m.generateResponseFn(
+			ctx,
+			conversation,
+			messages,
+		)
+	}
+
+	return nil, errors.New("generate response not configured")
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+func newExternalTestMessage() *domain.Message {
 	return &domain.Message{
 		ID:             uuid.New(),
 		ConversationID: uuid.New(),
-		Role:           "USER",
-		Content:        "Olá, gostaria de saber mais sobre este imóvel.",
+		Role:           domain.MessageRoleUser,
+		Content:        "Estou procurando um apartamento na zona sul.",
 	}
 }
 
-func TestMessageService_Create(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		ctx := context.Background()
-		message := newTestMessage()
-
-		repository := &messageRepositoryMock{
-			createFn: func(
-				_ context.Context,
-				input *domain.Message,
-			) (*domain.Message, error) {
-				return input, nil
-			},
-		}
-
-		service := NewMessageService(repository)
-
-		result, err := service.Create(ctx, message)
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("expected message, got nil")
-		}
-
-		if result.ID != message.ID {
-			t.Fatalf(
-				"expected id %s, got %s",
-				message.ID,
-				result.ID,
-			)
-		}
-	})
-
-	t.Run("nil message", func(t *testing.T) {
-		service := NewMessageService(&messageRepositoryMock{})
-
-		result, err := service.Create(
-			context.Background(),
-			nil,
-		)
-
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-	})
-
-	t.Run("invalid message", func(t *testing.T) {
-		message := newTestMessage()
-		message.Content = ""
-
-		service := NewMessageService(&messageRepositoryMock{})
-
-		result, err := service.Create(
-			context.Background(),
-			message,
-		)
-
-		if err == nil {
-			t.Fatal("expected validation error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-	})
-
-	t.Run("repository error", func(t *testing.T) {
-		expectedErr := errors.New("repository failure")
-
-		repository := &messageRepositoryMock{
-			createFn: func(
-				_ context.Context,
-				_ *domain.Message,
-			) (*domain.Message, error) {
-				return nil, expectedErr
-			},
-		}
-
-		service := NewMessageService(repository)
-
-		result, err := service.Create(
-			context.Background(),
-			newTestMessage(),
-		)
-
-		if err == nil {
-			t.Fatal("expected repository error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-
-		if !errors.Is(err, expectedErr) {
-			t.Fatalf(
-				"expected wrapped repository error, got %v",
-				err,
-			)
-		}
-	})
+func newExternalTestConversation() *domain.Conversation {
+	return &domain.Conversation{
+		ID:     uuid.New(),
+		LeadID: uuid.New(),
+		Status: domain.ConversationStatusActive,
+	}
 }
 
-func TestMessageService_GetByID(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		message := newTestMessage()
-
-		repository := &messageRepositoryMock{
-			getByIDFn: func(
-				_ context.Context,
-				id uuid.UUID,
-			) (*domain.Message, error) {
-				if id != message.ID {
-					t.Fatalf(
-						"expected id %s, got %s",
-						message.ID,
-						id,
-					)
-				}
-
-				return message, nil
-			},
-		}
-
-		service := NewMessageService(repository)
-
-		result, err := service.GetByID(
-			context.Background(),
-			message.ID,
-		)
-
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("expected message, got nil")
-		}
-
-		if result.ID != message.ID {
-			t.Fatalf(
-				"expected id %s, got %s",
-				message.ID,
-				result.ID,
-			)
-		}
-	})
-
-	t.Run("invalid id", func(t *testing.T) {
-		service := NewMessageService(&messageRepositoryMock{})
-
-		result, err := service.GetByID(
-			context.Background(),
-			uuid.Nil,
-		)
-
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-	})
-
-	t.Run("repository error", func(t *testing.T) {
-		expectedErr := errors.New("repository failure")
-
-		repository := &messageRepositoryMock{
-			getByIDFn: func(
-				_ context.Context,
-				_ uuid.UUID,
-			) (*domain.Message, error) {
-				return nil, expectedErr
-			},
-		}
-
-		service := NewMessageService(repository)
-
-		result, err := service.GetByID(
-			context.Background(),
-			uuid.New(),
-		)
-
-		if err == nil {
-			t.Fatal("expected repository error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-
-		if !errors.Is(err, expectedErr) {
-			t.Fatalf(
-				"expected wrapped repository error, got %v",
-				err,
-			)
-		}
-	})
+func newExternalTestService(
+	messageRepository repository.MessageRepository,
+	conversationRepository repository.ConversationRepository,
+	aiService application.AIService,
+) *application.MessageService {
+	return application.NewMessageService(
+		messageRepository,
+		conversationRepository,
+		aiService,
+	)
 }
 
-func TestMessageService_List(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		messages := []*domain.Message{
-			newTestMessage(),
-			newTestMessage(),
-		}
+// ============================================================
+// CREATE
+// ============================================================
 
-		repository := &messageRepositoryMock{
-			listFn: func(
-				_ context.Context,
-				limit int,
-				offset int,
-			) ([]*domain.Message, error) {
-				if limit != 10 {
-					t.Fatalf("expected limit 10, got %d", limit)
-				}
+func TestExternalMessageServiceCreate(t *testing.T) {
+	message := newExternalTestMessage()
 
-				if offset != 20 {
-					t.Fatalf("expected offset 20, got %d", offset)
-				}
+	called := false
 
-				return messages, nil
-			},
-		}
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
 
-		service := NewMessageService(repository)
+			called = true
 
-		result, err := service.List(
-			context.Background(),
-			10,
-			20,
-		)
+			if input != message {
+				t.Fatal("expected same message")
+			}
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
+			return input, nil
+		},
+	}
 
-		if len(result) != 2 {
-			t.Fatalf(
-				"expected 2 messages, got %d",
-				len(result),
-			)
-		}
-	})
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
 
-	t.Run("invalid limit", func(t *testing.T) {
-		service := NewMessageService(&messageRepositoryMock{})
+	result, err := service.Create(
+		context.Background(),
+		message,
+	)
 
-		result, err := service.List(
-			context.Background(),
-			0,
-			0,
-		)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
 
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
+	if !called {
+		t.Fatal("expected repository Create to be called")
+	}
 
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-	})
-
-	t.Run("negative limit", func(t *testing.T) {
-		service := NewMessageService(&messageRepositoryMock{})
-
-		result, err := service.List(
-			context.Background(),
-			-1,
-			0,
-		)
-
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-	})
-
-	t.Run("negative offset", func(t *testing.T) {
-		service := NewMessageService(&messageRepositoryMock{})
-
-		result, err := service.List(
-			context.Background(),
-			10,
-			-1,
-		)
-
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-	})
-
-	t.Run("repository error", func(t *testing.T) {
-		expectedErr := errors.New("repository failure")
-
-		repository := &messageRepositoryMock{
-			listFn: func(
-				_ context.Context,
-				_ int,
-				_ int,
-			) ([]*domain.Message, error) {
-				return nil, expectedErr
-			},
-		}
-
-		service := NewMessageService(repository)
-
-		result, err := service.List(
-			context.Background(),
-			10,
-			0,
-		)
-
-		if err == nil {
-			t.Fatal("expected repository error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-
-		if !errors.Is(err, expectedErr) {
-			t.Fatalf(
-				"expected wrapped repository error, got %v",
-				err,
-			)
-		}
-	})
+	if result != message {
+		t.Fatal("expected returned message")
+	}
 }
 
-func TestMessageService_ListByConversation(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		conversationID := uuid.New()
-		messages := []*domain.Message{
-			newTestMessage(),
-			newTestMessage(),
-		}
+func TestExternalMessageServiceCreateNilMessage(t *testing.T) {
+	called := false
 
-		repository := &messageRepositoryMock{
-			listByConversationFn: func(
-				_ context.Context,
-				id uuid.UUID,
-			) ([]*domain.Message, error) {
-				if id != conversationID {
-					t.Fatalf(
-						"expected conversation id %s, got %s",
-						conversationID,
-						id,
-					)
-				}
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
 
-				return messages, nil
-			},
-		}
+			called = true
 
-		service := NewMessageService(repository)
+			return input, nil
+		},
+	}
 
-		result, err := service.ListByConversation(
-			context.Background(),
-			conversationID,
-		)
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
+	result, err := service.Create(
+		context.Background(),
+		nil,
+	)
 
-		if len(result) != 2 {
-			t.Fatalf(
-				"expected 2 messages, got %d",
-				len(result),
-			)
-		}
-	})
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
 
-	t.Run("invalid conversation id", func(t *testing.T) {
-		service := NewMessageService(&messageRepositoryMock{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
 
-		result, err := service.ListByConversation(
-			context.Background(),
-			uuid.Nil,
-		)
-
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-	})
-
-	t.Run("repository error", func(t *testing.T) {
-		expectedErr := errors.New("repository failure")
-
-		repository := &messageRepositoryMock{
-			listByConversationFn: func(
-				_ context.Context,
-				_ uuid.UUID,
-			) ([]*domain.Message, error) {
-				return nil, expectedErr
-			},
-		}
-
-		service := NewMessageService(repository)
-
-		result, err := service.ListByConversation(
-			context.Background(),
-			uuid.New(),
-		)
-
-		if err == nil {
-			t.Fatal("expected repository error, got nil")
-		}
-
-		if result != nil {
-			t.Fatalf("expected nil result, got %v", result)
-		}
-
-		if !errors.Is(err, expectedErr) {
-			t.Fatalf(
-				"expected wrapped repository error, got %v",
-				err,
-			)
-		}
-	})
+	if called {
+		t.Fatal("repository should not be called")
+	}
 }
 
-func TestMessageService_Count(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		repository := &messageRepositoryMock{
-			countFn: func(
-				_ context.Context,
-			) (int64, error) {
-				return 15, nil
-			},
-		}
+func TestExternalMessageServiceCreateRepositoryError(t *testing.T) {
+	message := newExternalTestMessage()
 
-		service := NewMessageService(repository)
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
 
-		result, err := service.Count(
-			context.Background(),
-		)
+			return nil, errors.New("database unavailable")
+		},
+	}
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
 
-		if result != 15 {
-			t.Fatalf(
-				"expected count 15, got %d",
-				result,
-			)
-		}
-	})
+	result, err := service.Create(
+		context.Background(),
+		message,
+	)
 
-	t.Run("repository error", func(t *testing.T) {
-		expectedErr := errors.New("repository failure")
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
 
-		repository := &messageRepositoryMock{
-			countFn: func(
-				_ context.Context,
-			) (int64, error) {
-				return 0, expectedErr
-			},
-		}
-
-		service := NewMessageService(repository)
-
-		result, err := service.Count(
-			context.Background(),
-		)
-
-		if err == nil {
-			t.Fatal("expected repository error, got nil")
-		}
-
-		if result != 0 {
-			t.Fatalf("expected zero result, got %d", result)
-		}
-
-		if !errors.Is(err, expectedErr) {
-			t.Fatalf(
-				"expected wrapped repository error, got %v",
-				err,
-			)
-		}
-	})
+	if err == nil {
+		t.Fatal("expected repository error")
+	}
 }
 
-func TestMessageService_CountByConversation(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		conversationID := uuid.New()
+// ============================================================
+// GET BY ID
+// ============================================================
 
-		repository := &messageRepositoryMock{
-			countByConversationFn: func(
-				_ context.Context,
-				id uuid.UUID,
-			) (int64, error) {
-				if id != conversationID {
-					t.Fatalf(
-						"expected conversation id %s, got %s",
-						conversationID,
-						id,
-					)
-				}
+func TestExternalMessageServiceGetByID(t *testing.T) {
+	message := newExternalTestMessage()
 
-				return 7, nil
-			},
-		}
+	messageRepository := &testMessageRepository{
+		getByIDFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Message, error) {
 
-		service := NewMessageService(repository)
+			if id != message.ID {
+				t.Fatalf(
+					"expected id %s, got %s",
+					message.ID,
+					id,
+				)
+			}
 
-		result, err := service.CountByConversation(
-			context.Background(),
-			conversationID,
+			return message, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.GetByID(
+		context.Background(),
+		message.ID,
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result != message {
+		t.Fatal("expected message returned by repository")
+	}
+}
+
+func TestExternalMessageServiceGetByIDInvalidID(t *testing.T) {
+	called := false
+
+	expectedMessage := newExternalTestMessage()
+
+	messageRepository := &testMessageRepository{
+		getByIDFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Message, error) {
+
+			called = true
+
+			if id != uuid.Nil {
+				t.Fatalf(
+					"expected uuid.Nil, got %s",
+					id,
+				)
+			}
+
+			return expectedMessage, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.GetByID(
+		context.Background(),
+		uuid.Nil,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
 		)
+	}
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
+	if !called {
+		t.Fatal(
+			"expected repository to be called",
+		)
+	}
 
-		if result != 7 {
-			t.Fatalf(
-				"expected count 7, got %d",
-				result,
+	if result != expectedMessage {
+		t.Fatal(
+			"expected repository message",
+		)
+	}
+}
+
+// ============================================================
+// LIST
+// ============================================================
+
+func TestExternalMessageServiceList(t *testing.T) {
+	expected := []*domain.Message{
+		newExternalTestMessage(),
+		newExternalTestMessage(),
+	}
+
+	messageRepository := &testMessageRepository{
+		listFn: func(
+			ctx context.Context,
+			limit int,
+			offset int,
+		) ([]*domain.Message, error) {
+
+			if limit != 20 {
+				t.Fatalf("expected limit 20, got %d", limit)
+			}
+
+			if offset != 10 {
+				t.Fatalf("expected offset 10, got %d", offset)
+			}
+
+			return expected, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.List(
+		context.Background(),
+		20,
+		10,
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if len(result) != len(expected) {
+		t.Fatalf(
+			"expected %d messages, got %d",
+			len(expected),
+			len(result),
+		)
+	}
+}
+
+func TestExternalMessageServiceListInvalidLimit(t *testing.T) {
+	called := false
+
+	messageRepository := &testMessageRepository{
+		listFn: func(
+			ctx context.Context,
+			limit int,
+			offset int,
+		) ([]*domain.Message, error) {
+
+			called = true
+
+			if limit != 0 {
+				t.Fatalf(
+					"expected limit 0, got %d",
+					limit,
+				)
+			}
+
+			if offset != 0 {
+				t.Fatalf(
+					"expected offset 0, got %d",
+					offset,
+				)
+			}
+
+			return nil, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.List(
+		context.Background(),
+		0,
+		0,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
+		)
+	}
+
+	if !called {
+		t.Fatal(
+			"expected repository to be called",
+		)
+	}
+
+	if result != nil {
+		t.Fatalf(
+			"expected nil result, got %v",
+			result,
+		)
+	}
+}
+
+func TestExternalMessageServiceListInvalidOffset(t *testing.T) {
+	called := false
+
+	messageRepository := &testMessageRepository{
+		listFn: func(
+			ctx context.Context,
+			limit int,
+			offset int,
+		) ([]*domain.Message, error) {
+
+			called = true
+
+			if limit != 20 {
+				t.Fatalf(
+					"expected limit 20, got %d",
+					limit,
+				)
+			}
+
+			if offset != -1 {
+				t.Fatalf(
+					"expected offset -1, got %d",
+					offset,
+				)
+			}
+
+			return nil, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.List(
+		context.Background(),
+		20,
+		-1,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
+		)
+	}
+
+	if !called {
+		t.Fatal(
+			"expected repository to be called",
+		)
+	}
+
+	if result != nil {
+		t.Fatalf(
+			"expected nil result, got %v",
+			result,
+		)
+	}
+}
+
+// ============================================================
+// LIST BY CONVERSATION
+// ============================================================
+
+func TestExternalMessageServiceListByConversation(t *testing.T) {
+	conversationID := uuid.New()
+
+	expected := []*domain.Message{
+		{
+			ID:             uuid.New(),
+			ConversationID: conversationID,
+			Role:           domain.MessageRoleUser,
+			Content:        "Olá",
+		},
+		{
+			ID:             uuid.New(),
+			ConversationID: conversationID,
+			Role:           domain.MessageRoleAssistant,
+			Content:        "Olá! Como posso ajudar?",
+		},
+	}
+
+	messageRepository := &testMessageRepository{
+		listByConversationFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) ([]*domain.Message, error) {
+
+			if id != conversationID {
+				t.Fatalf(
+					"expected conversation id %s, got %s",
+					conversationID,
+					id,
+				)
+			}
+
+			return expected, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.ListByConversation(
+		context.Background(),
+		conversationID,
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf(
+			"expected 2 messages, got %d",
+			len(result),
+		)
+	}
+}
+
+func TestExternalMessageServiceListByConversationInvalidID(t *testing.T) {
+	called := false
+
+	messageRepository := &testMessageRepository{
+		listByConversationFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) ([]*domain.Message, error) {
+
+			called = true
+
+			if id != uuid.Nil {
+				t.Fatalf(
+					"expected uuid.Nil, got %s",
+					id,
+				)
+			}
+
+			return nil, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.ListByConversation(
+		context.Background(),
+		uuid.Nil,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
+		)
+	}
+
+	if !called {
+		t.Fatal(
+			"expected repository to be called",
+		)
+	}
+
+	if result != nil {
+		t.Fatalf(
+			"expected nil result, got %v",
+			result,
+		)
+	}
+}
+
+// ============================================================
+// COUNT
+// ============================================================
+
+func TestExternalMessageServiceCount(t *testing.T) {
+	messageRepository := &testMessageRepository{
+		countFn: func(
+			ctx context.Context,
+		) (int64, error) {
+
+			return 42, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.Count(
+		context.Background(),
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result != 42 {
+		t.Fatalf(
+			"expected 42, got %d",
+			result,
+		)
+	}
+}
+
+// ============================================================
+// COUNT BY CONVERSATION
+// ============================================================
+
+func TestExternalMessageServiceCountByConversation(t *testing.T) {
+	conversationID := uuid.New()
+
+	messageRepository := &testMessageRepository{
+		countByConversationFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (int64, error) {
+
+			if id != conversationID {
+				t.Fatalf(
+					"expected conversation id %s, got %s",
+					conversationID,
+					id,
+				)
+			}
+
+			return 8, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.CountByConversation(
+		context.Background(),
+		conversationID,
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result != 8 {
+		t.Fatalf(
+			"expected 8, got %d",
+			result,
+		)
+	}
+}
+
+func TestExternalMessageServiceCountByConversationInvalidID(t *testing.T) {
+	called := false
+
+	messageRepository := &testMessageRepository{
+		countByConversationFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (int64, error) {
+
+			called = true
+
+			if id != uuid.Nil {
+				t.Fatalf(
+					"expected uuid.Nil, got %s",
+					id,
+				)
+			}
+
+			return 0, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.CountByConversation(
+		context.Background(),
+		uuid.Nil,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error, got %v",
+			err,
+		)
+	}
+
+	if !called {
+		t.Fatal(
+			"expected repository to be called",
+		)
+	}
+
+	if result != 0 {
+		t.Fatalf(
+			"expected 0, got %d",
+			result,
+		)
+	}
+}
+
+// ============================================================
+// CREATE AND GENERATE RESPONSE
+// ============================================================
+
+func TestExternalMessageServiceCreateAndGenerateResponse(t *testing.T) {
+	conversation := newExternalTestConversation()
+
+	userMessage := &domain.Message{
+		ID:             uuid.New(),
+		ConversationID: conversation.ID,
+		Role:           domain.MessageRoleUser,
+		Content:        "Estou procurando um apartamento na zona sul.",
+	}
+
+	aiResponse := &domain.AIResponse{
+		Message:         "Qual é a faixa de preço que você pretende investir?",
+		Intent:          "property_interest",
+		NextAction:      "ask_budget",
+		TransactionType: "purchase",
+	}
+
+	var createdMessages []*domain.Message
+
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			message *domain.Message,
+		) (*domain.Message, error) {
+
+			createdMessages = append(
+				createdMessages,
+				message,
 			)
-		}
-	})
 
-	t.Run("invalid conversation id", func(t *testing.T) {
-		service := NewMessageService(&messageRepositoryMock{})
+			return message, nil
+		},
 
-		result, err := service.CountByConversation(
-			context.Background(),
-			uuid.Nil,
+		listByConversationFn: func(
+			ctx context.Context,
+			conversationID uuid.UUID,
+		) ([]*domain.Message, error) {
+
+			return []*domain.Message{
+				userMessage,
+			}, nil
+		},
+	}
+
+	conversationRepository := &testConversationRepository{
+		getByIDFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+
+			if id != conversation.ID {
+				t.Fatalf(
+					"expected conversation id %s, got %s",
+					conversation.ID,
+					id,
+				)
+			}
+
+			return conversation, nil
+		},
+	}
+
+	aiCalled := false
+
+	aiService := &testAIService{
+		generateResponseFn: func(
+			ctx context.Context,
+			inputConversation *domain.Conversation,
+			messages []*domain.Message,
+		) (*domain.AIResponse, error) {
+
+			aiCalled = true
+
+			if inputConversation != conversation {
+				t.Fatal("expected same conversation")
+			}
+
+			if len(messages) != 1 {
+				t.Fatalf(
+					"expected 1 message, got %d",
+					len(messages),
+				)
+			}
+
+			if messages[0] != userMessage {
+				t.Fatal("expected user message")
+			}
+
+			return aiResponse, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		conversationRepository,
+		aiService,
+	)
+
+	result, err := service.CreateAndGenerateResponse(
+		context.Background(),
+		userMessage,
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result != aiResponse {
+		t.Fatal("expected AI response")
+	}
+
+	if !aiCalled {
+		t.Fatal("expected AI service to be called")
+	}
+
+	if len(createdMessages) != 2 {
+		t.Fatalf(
+			"expected 2 created messages, got %d",
+			len(createdMessages),
 		)
+	}
 
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
+	// First message must be the lead message.
+	if createdMessages[0] != userMessage {
+		t.Fatal("expected first message to be user message")
+	}
 
-		if result != 0 {
-			t.Fatalf("expected zero result, got %d", result)
-		}
-	})
+	// Second message must be the AI response.
+	assistantMessage := createdMessages[1]
 
-	t.Run("repository error", func(t *testing.T) {
-		expectedErr := errors.New("repository failure")
-
-		repository := &messageRepositoryMock{
-			countByConversationFn: func(
-				_ context.Context,
-				_ uuid.UUID,
-			) (int64, error) {
-				return 0, expectedErr
-			},
-		}
-
-		service := NewMessageService(repository)
-
-		result, err := service.CountByConversation(
-			context.Background(),
-			uuid.New(),
+	if assistantMessage.Role != domain.MessageRoleAssistant {
+		t.Fatalf(
+			"expected assistant role, got %s",
+			assistantMessage.Role,
 		)
+	}
 
-		if err == nil {
-			t.Fatal("expected repository error, got nil")
-		}
+	if assistantMessage.ConversationID != conversation.ID {
+		t.Fatal("expected same conversation ID")
+	}
 
-		if result != 0 {
-			t.Fatalf("expected zero result, got %d", result)
-		}
+	if assistantMessage.Content != aiResponse.Message {
+		t.Fatalf(
+			"expected %q, got %q",
+			aiResponse.Message,
+			assistantMessage.Content,
+		)
+	}
+}
 
-		if !errors.Is(err, expectedErr) {
-			t.Fatalf(
-				"expected wrapped repository error, got %v",
-				err,
-			)
-		}
-	})
+// ============================================================
+// CREATE AND GENERATE RESPONSE - NIL MESSAGE
+// ============================================================
+
+func TestExternalMessageServiceCreateAndGenerateResponseNilMessage(
+	t *testing.T,
+) {
+	called := false
+
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			message *domain.Message,
+		) (*domain.Message, error) {
+
+			called = true
+
+			return message, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.CreateAndGenerateResponse(
+		context.Background(),
+		nil,
+	)
+
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if called {
+		t.Fatal("repository should not be called")
+	}
+}
+
+// ============================================================
+// CREATE AND GENERATE RESPONSE - MESSAGE REPOSITORY ERROR
+// ============================================================
+
+func TestExternalMessageServiceCreateAndGenerateResponseMessageRepositoryError(
+	t *testing.T,
+) {
+	message := newExternalTestMessage()
+
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
+
+			return nil, errors.New("message repository error")
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		&testConversationRepository{},
+		&testAIService{},
+	)
+
+	result, err := service.CreateAndGenerateResponse(
+		context.Background(),
+		message,
+	)
+
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+
+	if err == nil {
+		t.Fatal("expected repository error")
+	}
+}
+
+// ============================================================
+// CREATE AND GENERATE RESPONSE - CONVERSATION ERROR
+// ============================================================
+
+func TestExternalMessageServiceCreateAndGenerateResponseConversationError(
+	t *testing.T,
+) {
+	message := newExternalTestMessage()
+
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
+
+			return input, nil
+		},
+	}
+
+	conversationRepository := &testConversationRepository{
+		getByIDFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+
+			return nil, errors.New("conversation repository error")
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		conversationRepository,
+		&testAIService{},
+	)
+
+	result, err := service.CreateAndGenerateResponse(
+		context.Background(),
+		message,
+	)
+
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+
+	if err == nil {
+		t.Fatal("expected conversation repository error")
+	}
+}
+
+// ============================================================
+// CREATE AND GENERATE RESPONSE - CONVERSATION NOT FOUND
+// ============================================================
+
+func TestExternalMessageServiceCreateAndGenerateResponseConversationNotFound(
+	t *testing.T,
+) {
+	message := newExternalTestMessage()
+
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
+
+			return input, nil
+		},
+	}
+
+	conversationRepository := &testConversationRepository{
+		getByIDFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+
+			return nil, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		conversationRepository,
+		&testAIService{},
+	)
+
+	result, err := service.CreateAndGenerateResponse(
+		context.Background(),
+		message,
+	)
+
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+
+	if err == nil {
+		t.Fatal("expected conversation not found error")
+	}
+}
+
+// ============================================================
+// CREATE AND GENERATE RESPONSE - LIST MESSAGES ERROR
+// ============================================================
+
+func TestExternalMessageServiceCreateAndGenerateResponseListMessagesError(
+	t *testing.T,
+) {
+	conversation := newExternalTestConversation()
+
+	message := &domain.Message{
+		ID:             uuid.New(),
+		ConversationID: conversation.ID,
+		Role:           domain.MessageRoleUser,
+		Content:        "Olá",
+	}
+
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
+
+			return input, nil
+		},
+
+		listByConversationFn: func(
+			ctx context.Context,
+			conversationID uuid.UUID,
+		) ([]*domain.Message, error) {
+
+			return nil, errors.New("list messages error")
+		},
+	}
+
+	conversationRepository := &testConversationRepository{
+		getByIDFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+
+			return conversation, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		conversationRepository,
+		&testAIService{},
+	)
+
+	result, err := service.CreateAndGenerateResponse(
+		context.Background(),
+		message,
+	)
+
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+
+	if err == nil {
+		t.Fatal("expected list messages error")
+	}
+}
+
+// ============================================================
+// CREATE AND GENERATE RESPONSE - AI ERROR
+// ============================================================
+
+func TestExternalMessageServiceCreateAndGenerateResponseAIError(
+	t *testing.T,
+) {
+	conversation := newExternalTestConversation()
+
+	message := &domain.Message{
+		ID:             uuid.New(),
+		ConversationID: conversation.ID,
+		Role:           domain.MessageRoleUser,
+		Content:        "Olá",
+	}
+
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
+
+			return input, nil
+		},
+
+		listByConversationFn: func(
+			ctx context.Context,
+			conversationID uuid.UUID,
+		) ([]*domain.Message, error) {
+
+			return []*domain.Message{
+				message,
+			}, nil
+		},
+	}
+
+	conversationRepository := &testConversationRepository{
+		getByIDFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+
+			return conversation, nil
+		},
+	}
+
+	aiService := &testAIService{
+		generateResponseFn: func(
+			ctx context.Context,
+			inputConversation *domain.Conversation,
+			messages []*domain.Message,
+		) (*domain.AIResponse, error) {
+
+			return nil, errors.New("AI service error")
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		conversationRepository,
+		aiService,
+	)
+
+	result, err := service.CreateAndGenerateResponse(
+		context.Background(),
+		message,
+	)
+
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+
+	if err == nil {
+		t.Fatal("expected AI service error")
+	}
+}
+
+// ============================================================
+// CREATE AND GENERATE RESPONSE - NIL AI RESPONSE
+// ============================================================
+
+func TestExternalMessageServiceCreateAndGenerateResponseNilAIResponse(
+	t *testing.T,
+) {
+	conversation := newExternalTestConversation()
+
+	message := &domain.Message{
+		ID:             uuid.New(),
+		ConversationID: conversation.ID,
+		Role:           domain.MessageRoleUser,
+		Content:        "Olá",
+	}
+
+	messageRepository := &testMessageRepository{
+		createFn: func(
+			ctx context.Context,
+			input *domain.Message,
+		) (*domain.Message, error) {
+
+			return input, nil
+		},
+
+		listByConversationFn: func(
+			ctx context.Context,
+			conversationID uuid.UUID,
+		) ([]*domain.Message, error) {
+
+			return []*domain.Message{
+				message,
+			}, nil
+		},
+	}
+
+	conversationRepository := &testConversationRepository{
+		getByIDFn: func(
+			ctx context.Context,
+			id uuid.UUID,
+		) (*domain.Conversation, error) {
+
+			return conversation, nil
+		},
+	}
+
+	aiService := &testAIService{
+		generateResponseFn: func(
+			ctx context.Context,
+			inputConversation *domain.Conversation,
+			messages []*domain.Message,
+		) (*domain.AIResponse, error) {
+
+			return nil, nil
+		},
+	}
+
+	service := newExternalTestService(
+		messageRepository,
+		conversationRepository,
+		aiService,
+	)
+
+	result, err := service.CreateAndGenerateResponse(
+		context.Background(),
+		message,
+	)
+
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+
+	if err == nil {
+		t.Fatal("expected nil AI response error")
+	}
 }
