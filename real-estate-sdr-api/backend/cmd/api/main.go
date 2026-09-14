@@ -58,8 +58,13 @@ func main() {
 	//
 
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
-		log.Println("database connection verified")
-		log.Println("migration step completed")
+		migrator := postgres.NewMigrator(pool)
+
+		if err := migrator.Run(ctx, "/app/migrations"); err != nil {
+			log.Fatalf("migration failed: %v", err)
+		}
+
+		log.Println("migrations completed successfully")
 
 		return
 	}
