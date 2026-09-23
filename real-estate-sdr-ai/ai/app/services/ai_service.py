@@ -94,22 +94,26 @@ class AIService:
         # 2. Recuperar ou criar estado
         # ==============================================================
 
-        state = await self._get_or_create_state(conversation.id)
+        state = await self._get_or_create_state(
+            conversation.id
+        )
 
         if (
-                state.state == ConversationStateType.WAITING_LEAD
-                and state.previous_state is not None
+            state.state == ConversationStateType.WAITING_LEAD
+            and state.previous_state is not None
         ):
-            state = self.state_machine.resume_after_follow_up(state)
+            state = self.state_machine.resume_after_follow_up(
+                state
+            )
 
         # ==============================================================
         # 3. Persistir mensagem do lead
         # ==============================================================
 
-        await self._persist_lead_message_if_needed(
-            conversation_id=conversation_id,
-            lead_message=lead_message,
-        )
+        # await self._persist_lead_message_if_needed(
+        #     conversation_id=conversation_id,
+        #     lead_message=lead_message,
+        # )
 
         # ==============================================================
         # 4. Buscar propriedades somente quando necessário
@@ -172,6 +176,11 @@ class AIService:
             state
         )
 
+        response = self._enforce_next_action_message(
+            response=response,
+            state=state,
+        )
+
         # ==============================================================
         # 10. Matching de imóveis
         # ==============================================================
@@ -199,16 +208,36 @@ class AIService:
         # 11. Recomendação
         # ==============================================================
 
-        if (
-            state.next_action == NextAction.RECOMMEND_PROPERTY
-            and matched_properties
-        ):
-            response = await self._generate_property_recommendation(
-                lead=lead,
-                conversation=conversation,
-                state=state,
-                properties=matched_properties,
-            )
+        if state.next_action == NextAction.RECOMMEND_PROPERTY:
+
+            # A State Machine pode chegar diretamente em
+            # RECOMMEND_PROPERTY sem passar por MATCH_PROPERTY.
+            #
+            # Nesse caso, matched_properties ainda estará vazio.
+            # Como a aplicação é responsável pelo matching,
+            # garantimos que os imóveis sejam buscados aqui.
+
+            if not matched_properties:
+
+                matched_properties = await self._match_properties(
+                    state
+                )
+
+            if matched_properties:
+
+                # Garante que o primeiro imóvel encontrado
+                # seja registrado como imóvel selecionado.
+                state = self._apply_property_match(
+                    state=state,
+                    matched_properties=matched_properties,
+                )
+
+                response = await self._generate_property_recommendation(
+                    lead=lead,
+                    conversation=conversation,
+                    state=state,
+                    properties=matched_properties,
+                )
 
         # ==============================================================
         # 12. Caso não tenha encontrado imóveis
@@ -235,10 +264,10 @@ class AIService:
         # 14. Persistir resposta do assistant
         # ==============================================================
 
-        await self._persist_assistant_message(
-            conversation_id=conversation_id,
-            response=response,
-        )
+        # await self._persist_assistant_message(
+        #     conversation_id=conversation_id,
+        #     response=response,
+        # )
 
         # ==============================================================
         # 15. Retornar
@@ -369,12 +398,14 @@ class AIService:
         # --------------------------------------------------------------
         # Consistência entre fluxo e campos financeiros
         # --------------------------------------------------------------
+
         # "budget" pertence ao fluxo de compra.
         # "investment_ticket" pertence ao fluxo de investimento.
         #
         # O LLM pode interpretar corretamente o valor e ainda assim
         # preencher os dois campos. A aplicação é a autoridade final
         # sobre o estado, portanto removemos a ambiguidade aqui.
+
         if flow == ConversationFlow.INVESTMENT:
             budget = None
 
@@ -442,13 +473,53 @@ class AIService:
 
         return value
 
+    def _enforce_next_action_message(
+        self,
+        response: AIResponse,
+        state: ConversationState,
+    ) -> AIResponse:
+
+        messages = {
+            NextAction.ASK_BUDGET: (
+                "Qual é o orçamento que você pretende investir na compra do imóvel?"
+            ),
+            NextAction.ASK_BEDROOMS: (
+                "Quantos quartos você gostaria que o apartamento tivesse?"
+            ),
+            NextAction.ASK_LOCATION: (
+                "Em qual região ou bairro você gostaria de procurar o imóvel?"
+            ),
+            NextAction.ASK_URGENCY: (
+                "Quando você pretende realizar a compra?"
+            ),
+        }
+
+        message = messages.get(
+            state.next_action
+        )
+
+        if not message:
+            return response
+
+        return AIResponse(
+            message=message,
+            intent=response.intent,
+            lead_status=response.lead_status,
+            qualification_score=response.qualification_score,
+            next_action=response.next_action,
+            reasoning=response.reasoning,
+            metadata=response.metadata,
+            transaction_type=response.transaction_type,
+            qualification=response.qualification,
+        )
+
     # ==================================================================
     # PROPERTY MATCHING
     # ==================================================================
 
     async def _match_properties(
-            self,
-            state: ConversationState,
+        self,
+        state: ConversationState,
     ) -> list[dict[str, Any]]:
 
         properties = await self.api_client.get_properties()
@@ -516,7 +587,9 @@ class AIService:
             if not region:
                 continue
 
-            matched.append(property_data)
+            matched.append(
+                property_data
+            )
 
         matched.sort(
             key=self._property_price
@@ -563,7 +636,7 @@ class AIService:
 
     @staticmethod
     def _is_available(
-            property_data: dict[str, Any],
+        property_data: dict[str, Any],
     ) -> bool:
 
         status = property_data.get("status")
@@ -587,9 +660,9 @@ class AIService:
         return bool(available)
 
     def _matches_property_type(
-            self,
-            property_data: dict[str, Any],
-            property_type: str | None,
+        self,
+        property_data: dict[str, Any],
+        property_type: str | None,
     ) -> bool:
 
         if not property_type:
@@ -657,6 +730,7 @@ class AIService:
 
         try:
             return float(price) <= float(budget)
+
         except (TypeError, ValueError):
             return False
 
@@ -678,6 +752,7 @@ class AIService:
 
         try:
             return int(value) >= int(bedrooms)
+
         except (TypeError, ValueError):
             return False
 
@@ -865,7 +940,7 @@ class AIService:
             content = str(
                 message.get(
                     "content",
-                    "",
+                    ""
                 )
             )
 
@@ -982,6 +1057,7 @@ class AIService:
 
         try:
             return float(value)
+
         except (TypeError, ValueError):
             return 0.0
 

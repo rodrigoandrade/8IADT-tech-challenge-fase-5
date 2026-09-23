@@ -38,6 +38,11 @@ class ConversationStateModel(Base):
         nullable=True,
     )
 
+    previous_next_action: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
     intent: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,

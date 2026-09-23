@@ -499,6 +499,18 @@ Depois de interpretar a mensagem atual:
 3. nunca apague uma informação já conhecida;
 4. determine a resposta adequada ao próximo passo comercial;
 5. não recomende imóveis se a qualificação ainda estiver incompleta.
+6. A resposta DEVE seguir exatamente a próxima ação indicada
+   em "state.next_action".
+7. "state.next_action" é determinístico e tem prioridade sobre
+   qualquer exemplo existente neste prompt.
+8. Se "state.next_action" for "ask_budget", NÃO pergunte
+   quantidade de quartos, região ou urgência.
+9. Se "state.next_action" for "ask_bedrooms", NÃO pergunte
+   orçamento, região ou urgência.
+10. Se "state.next_action" for "ask_location", NÃO pergunte
+    orçamento, quartos ou urgência.
+11. Se "state.next_action" for "ask_urgency", NÃO pergunte
+    orçamento, quartos ou região.
 
 ============================================================
 REGRA CRÍTICA SOBRE TRANSACTION_TYPE
@@ -562,17 +574,28 @@ NÃO faça matching.
 
 Faça somente a próxima pergunta de qualificação.
 
-Se a próxima ação for ASK_BEDROOMS, a resposta deve perguntar
-quantos quartos o cliente deseja.
+Se "state.next_action" for "ask_budget", a resposta DEVE
+perguntar somente o orçamento do imóvel.
 
-Se a próxima ação for ASK_URGENCY, a resposta deve perguntar
-quando o cliente pretende realizar a compra.
+Se "state.next_action" for "ask_bedrooms", a resposta DEVE
+perguntar somente a quantidade de quartos.
 
-Se a próxima ação for MATCH_PROPERTY, a aplicação realizará
-o matching.
+Se "state.next_action" for "ask_location", a resposta DEVE
+perguntar somente a região/localização.
 
-Se a próxima ação for RECOMMEND_PROPERTY, utilize somente
-"matched_properties".
+Se "state.next_action" for "ask_urgency", a resposta DEVE
+perguntar somente quando o cliente pretende realizar a compra.
+
+Se "state.next_action" for "match_property", NÃO faça nova
+pergunta de qualificação.
+
+Se "state.next_action" for "recommend_property", utilize
+somente "matched_properties".
+
+A resposta DEVE ser compatível com "state.next_action".
+
+NUNCA faça uma pergunta diferente daquela determinada por
+"state.next_action".
 
 ============================================================
 REGRA CRÍTICA: EXTRAÇÃO DA MENSAGEM ATUAL

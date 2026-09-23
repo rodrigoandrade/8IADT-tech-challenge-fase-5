@@ -103,21 +103,24 @@ async def generate_response(
     service: AIService = Depends(get_ai_service),
 ):
     try:
-
         return await service.generate_response(
             conversation
         )
 
     except ValueError as exc:
-
         raise HTTPException(
             status_code=400,
             detail=str(exc),
-        )
+        ) from exc
 
     except Exception as exc:
+        import logging
+
+        logging.exception(
+            "Erro ao gerar resposta da IA"
+        )
 
         raise HTTPException(
             status_code=500,
             detail=str(exc),
-        )
+        ) from exc

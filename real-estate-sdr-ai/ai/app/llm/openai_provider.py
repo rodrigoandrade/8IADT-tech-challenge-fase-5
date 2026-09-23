@@ -63,6 +63,16 @@ class OpenAIProvider(LLMProvider):
                 "O prompt não pode ser vazio."
             )
 
+        print("\n" + "=" * 80)
+        print("PROMPT ENVIADO PARA OPENAI")
+        print("=" * 80)
+
+        for line in prompt.splitlines():
+            if "next_action" in line.lower():
+                print(line)
+
+        print("=" * 80 + "\n")
+
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[

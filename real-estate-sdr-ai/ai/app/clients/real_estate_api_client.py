@@ -76,6 +76,36 @@ class RealEstateAPIClient:
             f"/conversations/{conversation_id}"
         )
 
+    async def get_conversations(
+            self,
+            limit: int = 100,
+            offset: int = 0,
+    ) -> list[dict[str, Any]]:
+
+        response = await self._get(
+            "/conversations",
+            params={
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+
+        if isinstance(response, list):
+            return response
+
+        if isinstance(response, dict):
+            items = response.get("items")
+
+            if isinstance(items, list):
+                return items
+
+            value = response.get("value")
+
+            if isinstance(value, list):
+                return value
+
+        return []
+
     async def get_lead(
         self,
         lead_id: str,
