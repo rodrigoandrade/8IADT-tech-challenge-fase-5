@@ -106,7 +106,7 @@ SELECT
     content,
     created_at
 FROM messages
-ORDER BY created_at ASC
+ORDER BY created_at DESC
     LIMIT $1
 OFFSET $2
 `

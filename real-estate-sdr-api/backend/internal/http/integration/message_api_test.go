@@ -123,21 +123,21 @@ func createTestLeadForMessage(
 	_, err := server.pool.Exec(
 		context.Background(),
 		`
-			INSERT INTO leads (
-				id,
-				name,
-				email,
-				phone,
-				status
-			)
-			VALUES (
-				$1,
-				$2,
-				$3,
-				$4,
-				'NEW'
-			)
-		`,
+                        INSERT INTO leads (
+                                id,
+                                name,
+                                email,
+                                phone,
+                                status
+                        )
+                        VALUES (
+                                $1,
+                                $2,
+                                $3,
+                                $4,
+                                'NEW'
+                        )
+                `,
 		leadID,
 		"Message Test Lead",
 		"message-"+leadID.String()+"@example.com",
@@ -175,21 +175,21 @@ func createTestConversationForMessage(
 	_, err := server.pool.Exec(
 		context.Background(),
 		`
-			INSERT INTO conversations (
-				id,
-				lead_id,
-				status,
-				started_at,
-				ended_at
-			)
-			VALUES (
-				$1,
-				$2,
-				'ACTIVE',
-				$3,
-				NULL
-			)
-		`,
+                        INSERT INTO conversations (
+                                id,
+                                lead_id,
+                                status,
+                                started_at,
+                                ended_at
+                        )
+                        VALUES (
+                                $1,
+                                $2,
+                                'ACTIVE',
+                                $3,
+                                NULL
+                        )
+                `,
 		conversationID,
 		leadID,
 		startedAt,
@@ -225,19 +225,19 @@ func createTestMessage(
 	_, err := server.pool.Exec(
 		context.Background(),
 		`
-			INSERT INTO messages (
-				id,
-				conversation_id,
-				role,
-				content
-			)
-			VALUES (
-				$1,
-				$2,
-				$3,
-				$4
-			)
-		`,
+                        INSERT INTO messages (
+                                id,
+                                conversation_id,
+                                role,
+                                content
+                        )
+                        VALUES (
+                                $1,
+                                $2,
+                                $3,
+                                $4
+                        )
+                `,
 		messageID,
 		conversationID,
 		"USER",
@@ -265,16 +265,8 @@ func createTestMessage(
 func TestMessageAPI_CreateAndGet(t *testing.T) {
 	server := setupMessageTestServer(t)
 
-	leadID := createTestLeadForMessage(
-		t,
-		server,
-	)
-
-	conversationID := createTestConversationForMessage(
-		t,
-		server,
-		leadID,
-	)
+	leadID := createTestLeadForMessage(t, server)
+	conversationID := createTestConversationForMessage(t, server, leadID)
 
 	message := domain.Message{
 		ConversationID: conversationID,
@@ -283,144 +275,78 @@ func TestMessageAPI_CreateAndGet(t *testing.T) {
 	}
 
 	data := []byte(`{
-    	"conversation_id": "` + conversationID.String() + `",
-    	"role": "USER",
-    	"content": "Olá, gostaria de saber mais sobre o imóvel."
+		"conversation_id": "` + conversationID.String() + `",
+		"role": "USER",
+		"content": "Olá, gostaria de saber mais sobre o imóvel."
 	}`)
 
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/messages",
-		bytes.NewReader(data),
-	)
-
-	req.Header.Set(
-		"Content-Type",
-		"application/json",
-	)
+	req := httptest.NewRequest(http.MethodPost, "/messages", bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
 
 	recorder := httptest.NewRecorder()
-
-	server.router.ServeHTTP(
-		recorder,
-		req,
-	)
+	server.router.ServeHTTP(recorder, req)
 
 	if recorder.Code != http.StatusCreated {
-		t.Fatalf(
-			"expected status %d, got %d: %s",
-			http.StatusCreated,
-			recorder.Code,
-			recorder.Body.String(),
-		)
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, recorder.Code, recorder.Body.String())
 	}
 
-	var created domain.Message
-
-	if err := json.Unmarshal(
-		recorder.Body.Bytes(),
-		&created,
-	); err != nil {
-		t.Fatalf(
-			"failed to decode created message: %v",
-			err,
-		)
+	// O POST /messages retorna a resposta da IA.
+	var aiResponse domain.AIResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &aiResponse); err != nil {
+		t.Fatalf("failed to decode AI response: %v", err)
 	}
 
-	if created.ID == uuid.Nil {
-		t.Fatal("expected created message ID")
+	if aiResponse.Message == "" {
+		t.Fatal("expected non-empty AI response message")
 	}
 
-	if created.ConversationID != conversationID {
-		t.Fatalf(
-			"expected conversation ID %s, got %s",
-			conversationID,
-			created.ConversationID,
-		)
-	}
-
-	if created.Role != domain.MessageRoleUser {
-		t.Fatalf(
-			"expected role %q, got %q",
-			domain.MessageRoleUser,
-			created.Role,
-		)
-	}
-
-	if created.Content != message.Content {
-		t.Fatalf(
-			"expected content %q, got %q",
-			message.Content,
-			created.Content,
-		)
-	}
-
-	messageID := created.ID
-
-	getRequest := httptest.NewRequest(
+	// A mensagem do lead e a resposta do assistente devem ter sido persistidas.
+	messagesRequest := httptest.NewRequest(
 		http.MethodGet,
-		"/messages/"+messageID.String(),
+		"/conversations/"+conversationID.String()+"/messages",
 		nil,
 	)
+	messagesRecorder := httptest.NewRecorder()
+	server.router.ServeHTTP(messagesRecorder, messagesRequest)
 
-	getRecorder := httptest.NewRecorder()
-
-	server.router.ServeHTTP(
-		getRecorder,
-		getRequest,
-	)
-
-	if getRecorder.Code != http.StatusOK {
-		t.Fatalf(
-			"expected status %d, got %d: %s",
-			http.StatusOK,
-			getRecorder.Code,
-			getRecorder.Body.String(),
-		)
+	if messagesRecorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, messagesRecorder.Code, messagesRecorder.Body.String())
 	}
 
-	var found domain.Message
-
-	if err := json.Unmarshal(
-		getRecorder.Body.Bytes(),
-		&found,
-	); err != nil {
-		t.Fatalf(
-			"failed to decode message: %v",
-			err,
-		)
+	var messages []*domain.Message
+	if err := json.Unmarshal(messagesRecorder.Body.Bytes(), &messages); err != nil {
+		t.Fatalf("failed to decode conversation messages: %v", err)
 	}
 
-	if found.ID != messageID {
-		t.Fatalf(
-			"expected message ID %s, got %s",
-			messageID,
-			found.ID,
-		)
+	foundUserMessage := false
+	foundAssistantMessage := false
+
+	for _, persistedMessage := range messages {
+		if persistedMessage.ConversationID != conversationID {
+			continue
+		}
+
+		if persistedMessage.Role == domain.MessageRoleUser && persistedMessage.Content == message.Content {
+			if persistedMessage.ID == uuid.Nil {
+				t.Fatal("expected persisted user message ID")
+			}
+			foundUserMessage = true
+		}
+
+		if persistedMessage.Role == domain.MessageRoleAssistant && persistedMessage.Content == aiResponse.Message {
+			if persistedMessage.ID == uuid.Nil {
+				t.Fatal("expected persisted assistant message ID")
+			}
+			foundAssistantMessage = true
+		}
 	}
 
-	if found.ConversationID != conversationID {
-		t.Fatalf(
-			"expected conversation ID %s, got %s",
-			conversationID,
-			found.ConversationID,
-		)
+	if !foundUserMessage {
+		t.Fatal("expected user message to be persisted")
 	}
 
-	if found.Role != domain.MessageRoleUser {
-		t.Fatalf(
-			"expected role %q, got %q",
-			domain.MessageRoleUser,
-			found.Role,
-		)
-	}
-
-	if found.Content != message.Content {
-		t.Fatalf(
-			"expected content %q, got %q",
-			message.Content,
-			found.Content,
-		)
+	if !foundAssistantMessage {
+		t.Fatal("expected assistant message to be persisted")
 	}
 }
 
@@ -452,7 +378,7 @@ func TestMessageAPI_List(t *testing.T) {
 
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/messages?limit=100&offset=0",
+		"/messages?limit=10000&offset=0",
 		nil,
 	)
 
@@ -753,7 +679,7 @@ func TestMessageAPI_CreateInvalidConversation(t *testing.T) {
 	body := map[string]interface{}{
 		"conversation_id": invalidConversationID,
 		"role":            "USER",
-		"content":         "Olá, gostaria de saber mais sobre o imóvel.",
+		"content":         "OlÃ¡, gostaria de saber mais sobre o imÃ³vel.",
 	}
 
 	data, err := json.Marshal(body)

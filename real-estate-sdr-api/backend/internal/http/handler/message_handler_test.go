@@ -89,6 +89,117 @@ func (m *messageRepositoryMock) CountByConversation(
 	return 0, errors.New("count by conversation not configured")
 }
 
+// ============================================================
+// CONVERSATION REPOSITORY MOCK
+// ============================================================
+
+type conversationRepositoryMock struct {
+	createFn      func(context.Context, *domain.Conversation) (*domain.Conversation, error)
+	getByIDFn     func(context.Context, uuid.UUID) (*domain.Conversation, error)
+	getByLeadIDFn func(context.Context, uuid.UUID) ([]*domain.Conversation, error)
+	listFn        func(context.Context, int, int) ([]*domain.Conversation, error)
+	closeFn       func(context.Context, uuid.UUID) (*domain.Conversation, error)
+	countFn       func(context.Context) (int64, error)
+}
+
+func (m *conversationRepositoryMock) Create(
+	ctx context.Context,
+	conversation *domain.Conversation,
+) (*domain.Conversation, error) {
+	if m.createFn != nil {
+		return m.createFn(ctx, conversation)
+	}
+
+	return nil, errors.New("create conversation not configured")
+}
+
+func (m *conversationRepositoryMock) GetByID(
+	ctx context.Context,
+	id uuid.UUID,
+) (*domain.Conversation, error) {
+	if m.getByIDFn != nil {
+		return m.getByIDFn(ctx, id)
+	}
+
+	return nil, errors.New("get conversation by id not configured")
+}
+
+func (m *conversationRepositoryMock) GetByLeadID(
+	ctx context.Context,
+	leadID uuid.UUID,
+) ([]*domain.Conversation, error) {
+	if m.getByLeadIDFn != nil {
+		return m.getByLeadIDFn(ctx, leadID)
+	}
+
+	return nil, errors.New("get conversations by lead id not configured")
+}
+
+func (m *conversationRepositoryMock) List(
+	ctx context.Context,
+	limit int,
+	offset int,
+) ([]*domain.Conversation, error) {
+	if m.listFn != nil {
+		return m.listFn(ctx, limit, offset)
+	}
+
+	return nil, errors.New("list conversations not configured")
+}
+
+func (m *conversationRepositoryMock) Close(
+	ctx context.Context,
+	id uuid.UUID,
+) (*domain.Conversation, error) {
+	if m.closeFn != nil {
+		return m.closeFn(ctx, id)
+	}
+
+	return nil, errors.New("close conversation not configured")
+}
+
+func (m *conversationRepositoryMock) Count(
+	ctx context.Context,
+) (int64, error) {
+	if m.countFn != nil {
+		return m.countFn(ctx)
+	}
+
+	return 0, errors.New("count conversations not configured")
+}
+
+// ============================================================
+// AI SERVICE MOCK
+// ============================================================
+
+type aiServiceMock struct {
+	generateResponseFn func(
+		context.Context,
+		*domain.Conversation,
+		[]*domain.Message,
+	) (*domain.AIResponse, error)
+}
+
+func (m *aiServiceMock) GenerateResponse(
+	ctx context.Context,
+	conversation *domain.Conversation,
+	messages []*domain.Message,
+) (*domain.AIResponse, error) {
+	if m.generateResponseFn != nil {
+		return m.generateResponseFn(
+			ctx,
+			conversation,
+			messages,
+		)
+	}
+
+	return nil, errors.New("generate response not configured")
+}
+
+// ============================================================
+// TEST HELPERS
+// ============================================================
+
 func newTestMessageService(
 	repository *messageRepositoryMock,
 ) *application.MessageService {
@@ -96,6 +207,18 @@ func newTestMessageService(
 		repository,
 		nil,
 		nil,
+	)
+}
+
+func newTestMessageServiceWithAI(
+	repository *messageRepositoryMock,
+	conversationRepository *conversationRepositoryMock,
+	aiService *aiServiceMock,
+) *application.MessageService {
+	return application.NewMessageService(
+		repository,
+		conversationRepository,
+		aiService,
 	)
 }
 
@@ -107,6 +230,10 @@ func newTestMessage() *domain.Message {
 		Content:        "Gostaria de saber mais sobre este imóvel.",
 	}
 }
+
+// ============================================================
+// CREATE
+// ============================================================
 
 func TestMessageHandler_Create(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
@@ -120,9 +247,61 @@ func TestMessageHandler_Create(t *testing.T) {
 				message.ID = expected.ID
 				return message, nil
 			},
+			listByConversationFn: func(
+				_ context.Context,
+				_ uuid.UUID,
+			) ([]*domain.Message, error) {
+				return []*domain.Message{}, nil
+			},
 		}
 
-		service := newTestMessageService(repository)
+		conversationRepository := &conversationRepositoryMock{
+			getByIDFn: func(
+				_ context.Context,
+				id uuid.UUID,
+			) (*domain.Conversation, error) {
+				if id != expected.ConversationID {
+					t.Fatalf(
+						"expected conversation id %s, got %s",
+						expected.ConversationID,
+						id,
+					)
+				}
+
+				return &domain.Conversation{
+					ID:     expected.ConversationID,
+					LeadID: uuid.New(),
+					Status: domain.ConversationStatusActive,
+				}, nil
+			},
+		}
+
+		aiService := &aiServiceMock{
+			generateResponseFn: func(
+				_ context.Context,
+				conversation *domain.Conversation,
+				messages []*domain.Message,
+			) (*domain.AIResponse, error) {
+				if conversation == nil {
+					t.Fatal("expected conversation")
+				}
+
+				if messages == nil {
+					t.Fatal("expected messages")
+				}
+
+				return &domain.AIResponse{
+					Message: "Resposta da IA",
+				}, nil
+			},
+		}
+
+		service := newTestMessageServiceWithAI(
+			repository,
+			conversationRepository,
+			aiService,
+		)
+
 		handler := NewMessageHandler(service)
 
 		payload := []byte(`{
@@ -147,6 +326,16 @@ func TestMessageHandler_Create(t *testing.T) {
 				"expected status %d, got %d: %s",
 				http.StatusCreated,
 				rec.Code,
+				rec.Body.String(),
+			)
+		}
+
+		if !strings.Contains(
+			rec.Body.String(),
+			`"message":"Resposta da IA"`,
+		) {
+			t.Fatalf(
+				"expected AI response, got %s",
 				rec.Body.String(),
 			)
 		}
@@ -217,6 +406,10 @@ func TestMessageHandler_Create(t *testing.T) {
 		}
 	})
 }
+
+// ============================================================
+// GET BY ID
+// ============================================================
 
 func TestMessageHandler_GetByID(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
@@ -315,10 +508,9 @@ func TestMessageHandler_GetByID(t *testing.T) {
 
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf(
-				"expected status %d, got %d: %s",
+				"expected status %d, got %d",
 				http.StatusNotFound,
 				rec.Code,
-				rec.Body.String(),
 			)
 		}
 	})
@@ -356,6 +548,10 @@ func TestMessageHandler_GetByID(t *testing.T) {
 	})
 }
 
+// ============================================================
+// LIST
+// ============================================================
+
 func TestMessageHandler_List(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		repository := &messageRepositoryMock{
@@ -365,11 +561,17 @@ func TestMessageHandler_List(t *testing.T) {
 				offset int,
 			) ([]*domain.Message, error) {
 				if limit != 10 {
-					t.Fatalf("expected limit 10, got %d", limit)
+					t.Fatalf(
+						"expected limit 10, got %d",
+						limit,
+					)
 				}
 
 				if offset != 20 {
-					t.Fatalf("expected offset 20, got %d", offset)
+					t.Fatalf(
+						"expected offset 20, got %d",
+						offset,
+					)
 				}
 
 				return []*domain.Message{
@@ -535,6 +737,10 @@ func TestMessageHandler_List(t *testing.T) {
 	})
 }
 
+// ============================================================
+// LIST BY CONVERSATION
+// ============================================================
+
 func TestMessageHandler_ListByConversation(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		conversationID := uuid.New()
@@ -640,6 +846,10 @@ func TestMessageHandler_ListByConversation(t *testing.T) {
 	})
 }
 
+// ============================================================
+// COUNT
+// ============================================================
+
 func TestMessageHandler_Count(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		repository := &messageRepositoryMock{
@@ -671,7 +881,10 @@ func TestMessageHandler_Count(t *testing.T) {
 			)
 		}
 
-		if !strings.Contains(rec.Body.String(), `"count":42`) {
+		if !strings.Contains(
+			rec.Body.String(),
+			`"count":42`,
+		) {
 			t.Fatalf(
 				"expected count 42, got %s",
 				rec.Body.String(),
@@ -710,6 +923,10 @@ func TestMessageHandler_Count(t *testing.T) {
 		}
 	})
 }
+
+// ============================================================
+// COUNT BY CONVERSATION
+// ============================================================
 
 func TestMessageHandler_CountByConversation(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
@@ -754,7 +971,10 @@ func TestMessageHandler_CountByConversation(t *testing.T) {
 			)
 		}
 
-		if !strings.Contains(rec.Body.String(), `"count":8`) {
+		if !strings.Contains(
+			rec.Body.String(),
+			`"count":8`,
+		) {
 			t.Fatalf(
 				"expected count 8, got %s",
 				rec.Body.String(),

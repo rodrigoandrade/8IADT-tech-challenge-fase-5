@@ -38,19 +38,44 @@ func (h *MessageHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := domain.Message{
+	message := &domain.Message{
 		ConversationID: request.ConversationID,
 		Role:           request.Role,
 		Content:        request.Content,
 	}
 
-	created, err := h.service.Create(r.Context(), &message)
+	// Mensagens ASSISTANT/SYSTEM são apenas persistidas.
+	// Isso permite ao Follow-Up Service criar uma mensagem
+	// de follow-up sem disparar novamente a IA.
+	if message.Role == domain.MessageRoleAssistant ||
+		message.Role == domain.MessageRoleSystem {
+
+		createdMessage, err := h.service.Create(
+			r.Context(),
+			message,
+		)
+
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, createdMessage)
+		return
+	}
+
+	// Mensagem do lead: mantém o fluxo atual.
+	aiResponse, err := h.service.CreateAndGenerateResponse(
+		r.Context(),
+		message,
+	)
+
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, created)
+	writeJSON(w, http.StatusCreated, aiResponse)
 }
 
 // GetByID godoc

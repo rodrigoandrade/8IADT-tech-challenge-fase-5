@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -26,6 +27,7 @@ type Message struct {
 	ConversationID uuid.UUID
 	Role           string
 	Content        string
+	CreatedAt      time.Time
 }
 
 func (m *Message) Validate() error {

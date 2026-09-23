@@ -65,9 +65,13 @@ func (s *MessageService) CreateAndGenerateResponse(
 	}
 
 	// 1. Persiste a mensagem enviada pelo lead.
-	_, err := s.messageRepository.Create(ctx, message)
+	createdMessage, err := s.messageRepository.Create(ctx, message)
 	if err != nil {
 		return nil, err
+	}
+
+	if createdMessage == nil {
+		return nil, errors.New("message repository returned an empty message")
 	}
 
 	// 2. Recupera a conversa.

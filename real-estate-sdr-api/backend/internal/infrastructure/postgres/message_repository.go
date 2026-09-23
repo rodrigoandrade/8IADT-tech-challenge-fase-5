@@ -179,5 +179,6 @@ func mapGeneratedMessage(
 		ConversationID: message.ConversationID,
 		Role:           message.Role,
 		Content:        message.Content,
+		CreatedAt:      message.CreatedAt.Time,
 	}
 }
