@@ -6,7 +6,8 @@ from ai.app.llm.provider import LLMProvider
 from ai.app.llm.response_parser import ResponseParser
 from ai.app.prompt.prompt_builder import PromptBuilder
 from ai.app.services.ai_service import AIService
-
+from ai.app.agent.agent_router import AgentRouter
+from ai.app.agent.knowledge_agent import KnowledgeAgent
 
 class InMemoryConversationStateRepository:
 
@@ -65,6 +66,17 @@ class FakeRealEstateAPIClient:
             "role": role,
             "content": content,
         }
+
+
+class FakeRAGService:
+
+    async def retrieve(
+        self,
+        session,
+        question: str,
+        limit: int = 3,
+    ):
+        return []
 
 
 @pytest.fixture(scope="module")
@@ -135,6 +147,11 @@ def api_client():
 
 
 @pytest.fixture
+def rag_service():
+    return FakeRAGService()
+
+
+@pytest.fixture
 def service(
     api_client,
     llm_provider,
@@ -142,6 +159,7 @@ def service(
     response_parser,
     repository,
     state_machine,
+    rag_service,
 ):
     return AIService(
         api_client=api_client,
@@ -150,4 +168,10 @@ def service(
         response_parser=response_parser,
         state_repository=repository,
         state_machine=state_machine,
+        rag_service=rag_service,
+        agent_router=AgentRouter(),
+        knowledge_agent=KnowledgeAgent(
+            llm_provider=llm_provider,
+            prompt_builder=prompt_builder,
+        ),
     )

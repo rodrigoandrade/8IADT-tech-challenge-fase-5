@@ -18,6 +18,7 @@ class PromptBuilder:
     - identificar a intenção;
     - identificar o tipo de transação;
     - extrair dados de qualificação;
+    - utilizar conhecimento relevante da imobiliária;
     - gerar uma resposta natural.
 
     A aplicação é responsável por:
@@ -49,12 +50,23 @@ por controlar o fluxo comercial.
 A aplicação também possui um mecanismo determinístico
 de matching de imóveis.
 
+A aplicação também possui uma base de conhecimento
+com informações da imobiliária recuperadas através
+de busca semântica.
+
 Você NÃO deve inventar imóveis.
 Você NÃO deve inventar preços.
 Você NÃO deve inventar características.
 
 Você deve utilizar somente imóveis presentes em
 "matched_properties".
+
+Quando houver informações relevantes em
+"knowledge", você pode utilizá-las para responder
+perguntas do cliente sobre a imobiliária.
+
+Você NÃO deve inventar informações que não estejam
+presentes na conversa ou em "knowledge".
 
 ============================================================
 REGRAS GERAIS
@@ -64,8 +76,9 @@ REGRAS GERAIS
 
 2. Não invente informações.
 
-3. Utilize somente informações presentes na conversa
-   ou explicitamente fornecidas pelo cliente.
+3. Utilize somente informações presentes na conversa,
+   explicitamente fornecidas pelo cliente ou presentes
+   na base de conhecimento relevante.
 
 4. Preserve TODAS as informações já conhecidas.
 
@@ -107,6 +120,59 @@ Exemplos:
 17. Seja natural e conversacional.
 
 18. Não faça uma lista de perguntas.
+
+============================================================
+BASE DE CONHECIMENTO / RAG
+============================================================
+
+"knowledge" contém documentos recuperados semanticamente
+a partir da mensagem atual do cliente.
+
+Cada documento pode conter:
+
+- title;
+- content;
+- source;
+- similarity.
+
+Utilize somente o conteúdo dos documentos recuperados
+quando ele for relevante para a pergunta atual.
+
+A similaridade é apenas um indicador de relevância.
+Não mencione a similaridade ao cliente.
+
+Não diga que consultou uma base de conhecimento.
+
+Não mencione:
+
+- RAG;
+- embedding;
+- vector;
+- pgvector;
+- busca semântica;
+- documento;
+- base de conhecimento;
+- sistema interno.
+
+Se "knowledge" não contiver informação suficiente
+para responder uma pergunta, não invente uma resposta.
+
+Nesse caso, responda de forma natural informando que
+um consultor poderá confirmar a informação.
+
+Exemplo:
+
+Cliente:
+"Vocês atendem Moema?"
+
+Se "knowledge" contiver:
+
+"A imobiliária atua principalmente na Zona Sul
+de São Paulo, incluindo Moema..."
+
+Você pode responder:
+
+"Sim. Atuamos na Zona Sul de São Paulo, incluindo Moema."
 
 ============================================================
 INTENÇÃO
@@ -362,6 +428,9 @@ A resposta deve ser:
 - diretamente relacionada à próxima ação definida
   pela aplicação.
 
+Quando houver uma pergunta sobre informações da imobiliária,
+utilize "knowledge" quando houver informação relevante.
+
 Nunca mencione:
 
 - máquina de estados;
@@ -369,6 +438,8 @@ Nunca mencione:
 - LLM;
 - prompt;
 - aplicação;
+- RAG;
+- base de conhecimento;
 - processamento interno.
 
 ============================================================
@@ -423,6 +494,75 @@ Não retorne:
 - metadata
 """
 
+    KNOWLEDGE_SYSTEM_PROMPT = """
+    Você é um assistente de atendimento de uma imobiliária.
+
+    Sua função é responder perguntas informativas sobre a
+    imobiliária utilizando exclusivamente as informações
+    fornecidas em "knowledge".
+
+    A resposta DEVE ser retornada em JSON válido.
+
+    Formato obrigatório:
+
+    {
+      "message": "resposta para o cliente"
+    }
+
+    REGRAS:
+
+    1. Responda diretamente à pergunta do cliente.
+    2. Utilize somente informações presentes em "knowledge".
+    3. Não invente informações.
+    4. Não fale sobre estado de qualificação.
+    5. Não faça perguntas de qualificação.
+    6. Não recomende imóveis, a menos que isso esteja
+       explicitamente relacionado à pergunta.
+    7. Não mencione:
+       - RAG;
+       - embedding;
+       - vector;
+       - pgvector;
+       - busca semântica;
+       - documento;
+       - base de conhecimento;
+       - sistema interno.
+    8. Se as informações recuperadas não forem suficientes
+       para responder à pergunta, diga de forma natural que
+       um consultor poderá confirmar a informação.
+    9. Seja curto, natural e conversacional.
+    10. Responda em português brasileiro.
+    11. Retorne somente JSON válido.
+    """
+
+    def build_knowledge_prompt(
+            self,
+            question: str,
+            knowledge: list[dict[str, Any]] | None = None,
+    ) -> str:
+        knowledge = knowledge or []
+
+        knowledge_context = [
+            {
+                "title": item.get("title"),
+                "content": item.get("content"),
+            }
+            for item in knowledge
+        ]
+
+        payload = {
+            "question": question,
+            "knowledge": knowledge_context,
+        }
+
+        return (
+            f"{self.KNOWLEDGE_SYSTEM_PROMPT}\n\n"
+            "============================================================\n"
+            "CONTEXTO\n"
+            "============================================================\n\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        )
+
     def build(
         self,
         lead: Lead,
@@ -430,10 +570,12 @@ Não retorne:
         properties: list[Property] | None = None,
         matched_properties: list[dict[str, Any]] | None = None,
         state: Any | None = None,
+        knowledge: list[dict[str, Any]] | None = None,
     ) -> str:
 
         properties = properties or []
         matched_properties = matched_properties or []
+        knowledge = knowledge or []
 
         context = {
             "lead": self._serialize(lead),
@@ -446,6 +588,15 @@ Não retorne:
             "matched_properties": [
                 self._serialize(property_)
                 for property_ in matched_properties
+            ],
+            "knowledge": [
+                {
+                    "title": item.get("title"),
+                    "content": item.get("content"),
+                    "source": item.get("source"),
+                    "similarity": item.get("similarity"),
+                }
+                for item in knowledge
             ],
         }
 
@@ -488,6 +639,12 @@ Use:
 - state.expected_return
 
 como informações auxiliares para preservar o contexto.
+
+A seção "knowledge" contém informações recuperadas
+semanticamente para a mensagem atual.
+
+Utilize essas informações somente quando forem relevantes
+para responder à mensagem do cliente.
 
 A mensagem atual do cliente pode preencher uma informação
 que estava faltando.
@@ -690,8 +847,6 @@ capital que o cliente pretende disponibilizar para
 investimento imobiliário.
 
 ============================================================
-
-============================================================
 EXEMPLOS DE EXTRAÇÃO DE URGÊNCIA
 ============================================================
 
@@ -722,7 +877,8 @@ Identifique:
 2. o tipo de transação;
 3. todas as informações de qualificação conhecidas;
 4. a informação preenchida pela mensagem atual;
-5. a resposta adequada ao próximo passo.
+5. informações relevantes da seção "knowledge";
+6. a resposta adequada ao próximo passo.
 
 Retorne somente o JSON solicitado.
 """

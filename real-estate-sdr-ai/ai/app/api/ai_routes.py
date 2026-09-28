@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from ai.app.agent.knowledge_agent import KnowledgeAgent
 
 from ai.app.agent.state_machine import ConversationStateMachine
 from ai.app.clients.real_estate_api_client import RealEstateAPIClient
@@ -11,8 +12,11 @@ from ai.app.llm.openai_provider import OpenAIProvider
 from ai.app.llm.response_parser import ResponseParser
 from ai.app.models.conversation import Conversation
 from ai.app.prompt.prompt_builder import PromptBuilder
+from ai.app.rag.embeddings import EmbeddingService
+from ai.app.rag.rag_service import RAGService
+from ai.app.repositories.knowledge_repository import KnowledgeRepository
 from ai.app.services.ai_service import AIService
-
+from ai.app.agent.agent_router import AgentRouter
 
 router = APIRouter(
     prefix="/ai",
@@ -80,6 +84,19 @@ def get_ai_service(
     state_machine = ConversationStateMachine()
 
     # -----------------------------------------------------
+    # RAG
+    # -----------------------------------------------------
+
+    embedding_service = EmbeddingService()
+
+    knowledge_repository = KnowledgeRepository()
+
+    rag_service = RAGService(
+        embedding_service=embedding_service,
+        knowledge_repository=knowledge_repository,
+    )
+
+    # -----------------------------------------------------
     # AI Service
     # -----------------------------------------------------
 
@@ -90,6 +107,12 @@ def get_ai_service(
         response_parser=response_parser,
         state_repository=state_repository,
         state_machine=state_machine,
+        rag_service=rag_service,
+        agent_router=AgentRouter(),
+        knowledge_agent=KnowledgeAgent(
+            llm_provider=llm_provider,
+            prompt_builder=prompt_builder,
+        ),
     )
 
 

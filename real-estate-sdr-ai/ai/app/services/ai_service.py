@@ -1,20 +1,28 @@
 from typing import Any
-
+from ai.app.agent.knowledge_agent import KnowledgeAgent
+from ai.app.agent.agent_type import AgentType
+from ai.app.agent.agent_router import AgentRouter
 from ai.app.agent.state import (
     ConversationFlow,
     ConversationState,
     ConversationStateType,
     NextAction,
 )
+
 from ai.app.agent.state_machine import ConversationStateMachine
 from ai.app.clients.real_estate_api_client import RealEstateAPIClient
 from ai.app.llm.provider import LLMProvider
 from ai.app.llm.response_parser import ResponseParser
-from ai.app.models.ai_response import AIResponse
 from ai.app.models.conversation import Conversation
 from ai.app.prompt.prompt_builder import PromptBuilder
+from ai.app.rag.rag_service import RAGService
 from ai.app.repositories.conversation_state_repository import (
     ConversationStateRepository,
+)
+from ai.app.models.ai_response import (
+    AIResponse,
+    LeadIntent,
+    LeadStatus,
 )
 
 
@@ -27,6 +35,7 @@ class AIService:
     - recuperar o lead;
     - recuperar o estado da conversa;
     - interpretar a mensagem através do LLM;
+    - consultar a base de conhecimento via RAG;
     - atualizar a qualificação;
     - executar a máquina de estados;
     - buscar imóveis quando necessário;
@@ -37,13 +46,16 @@ class AIService:
     """
 
     def __init__(
-        self,
-        api_client: RealEstateAPIClient,
-        llm_provider: LLMProvider,
-        prompt_builder: PromptBuilder,
-        response_parser: ResponseParser,
-        state_repository: ConversationStateRepository,
-        state_machine: ConversationStateMachine,
+            self,
+            api_client: RealEstateAPIClient,
+            llm_provider: LLMProvider,
+            prompt_builder: PromptBuilder,
+            response_parser: ResponseParser,
+            state_repository: ConversationStateRepository,
+            state_machine: ConversationStateMachine,
+            rag_service: RAGService,
+            agent_router: AgentRouter,
+            knowledge_agent: KnowledgeAgent,
     ):
         self.api_client = api_client
         self.llm_provider = llm_provider
@@ -51,6 +63,9 @@ class AIService:
         self.response_parser = response_parser
         self.state_repository = state_repository
         self.state_machine = state_machine
+        self.rag_service = rag_service
+        self.agent_router = agent_router
+        self.knowledge_agent = knowledge_agent
 
     async def generate_response(
         self,
@@ -78,7 +93,21 @@ class AIService:
             )
 
         # ==============================================================
-        # 1. Buscar lead
+        # 1.5. Identificar o agente responsável
+        # ==============================================================
+
+        agent_type = self.agent_router.route(
+            lead_message.content
+        )
+
+        print(
+            f"[AGENT ROUTER] "
+            f"message='{lead_message.content}' "
+            f"agent='{agent_type.value}'"
+        )
+
+        # ==============================================================
+        # 1.6. Buscar lead
         # ==============================================================
 
         lead = await self.api_client.get_lead(
@@ -128,7 +157,47 @@ class AIService:
         # da mensagem atual e a State Machine determinar MATCH_PROPERTY.
 
         # ==============================================================
-        # 5. Construir prompt
+        # 5. Knowledge Agent
+        # ==============================================================
+
+        knowledge: list[dict[str, Any]] = []
+
+        if agent_type == AgentType.KNOWLEDGE:
+            from ai.app.infrastructure.database import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as session:
+                knowledge_response = await self.knowledge_agent.execute(
+                    rag_service=self.rag_service,
+                    session=session,
+                    question=lead_message.content,
+                )
+
+            print("\n========== KNOWLEDGE AGENT ==========")
+            print(knowledge_response)
+            print("=====================================\n")
+
+            response = AIResponse(
+                message=knowledge_response.message,
+                intent=LeadIntent.GENERAL_INQUIRY,
+                lead_status=LeadStatus.CONTACTED,
+                qualification_score=state.qualification_score,
+                next_action=None,
+                reasoning=None,
+                metadata={},
+                transaction_type=knowledge_response.transaction_type,
+                qualification={},
+            )
+
+            await self.state_repository.save(state)
+
+            return self._build_response(
+                state=state,
+                response=response,
+                matched_properties=[],
+            )
+
+        # ==============================================================
+        # 6. Construir prompt
         # ==============================================================
 
         prompt = self.prompt_builder.build(
@@ -137,10 +206,11 @@ class AIService:
             properties=properties,
             matched_properties=[],
             state=state,
+            knowledge=knowledge,
         )
 
         # ==============================================================
-        # 6. Executar LLM
+        # 7. Executar LLM
         # ==============================================================
 
         llm_response = await self.llm_provider.generate_response(
@@ -152,7 +222,7 @@ class AIService:
         print("==================================\n")
 
         # ==============================================================
-        # 7. Parsear resposta
+        # 8. Parsear resposta
         # ==============================================================
 
         response = self.response_parser.parse(
@@ -160,7 +230,7 @@ class AIService:
         )
 
         # ==============================================================
-        # 8. Atualizar estado com dados extraídos
+        # 9. Atualizar estado com dados extraídos
         # ==============================================================
 
         state = self._update_state_from_llm(
@@ -169,7 +239,7 @@ class AIService:
         )
 
         # ==============================================================
-        # 9. State Machine
+        # 10. State Machine
         # ==============================================================
 
         state = self.state_machine.transition(
@@ -182,7 +252,7 @@ class AIService:
         )
 
         # ==============================================================
-        # 10. Matching de imóveis
+        # 11. Matching de imóveis
         # ==============================================================
 
         matched_properties: list[dict[str, Any]] = []
@@ -205,7 +275,7 @@ class AIService:
                 )
 
         # ==============================================================
-        # 11. Recomendação
+        # 12. Recomendação
         # ==============================================================
 
         if state.next_action == NextAction.RECOMMEND_PROPERTY:
@@ -240,7 +310,7 @@ class AIService:
                 )
 
         # ==============================================================
-        # 12. Caso não tenha encontrado imóveis
+        # 13. Caso não tenha encontrado imóveis
         # ==============================================================
 
         if (
@@ -253,7 +323,7 @@ class AIService:
             )
 
         # ==============================================================
-        # 13. Persistir estado
+        # 14. Persistir estado
         # ==============================================================
 
         await self.state_repository.save(
@@ -261,7 +331,7 @@ class AIService:
         )
 
         # ==============================================================
-        # 14. Persistir resposta do assistant
+        # 15. Persistir resposta do assistant
         # ==============================================================
 
         # await self._persist_assistant_message(
@@ -270,7 +340,7 @@ class AIService:
         # )
 
         # ==============================================================
-        # 15. Retornar
+        # 16. Retornar
         # ==============================================================
 
         return self._build_response(
