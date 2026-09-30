@@ -35,6 +35,8 @@ def test_qualification_agent_type():
 
 def test_property_agent_type():
 
-    agent = PropertyAgent()
+    agent = PropertyAgent(
+        property_matcher=None
+    )
 
     assert agent.agent_type == AgentType.PROPERTY

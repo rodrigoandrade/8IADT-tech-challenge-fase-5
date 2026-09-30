@@ -8,6 +8,8 @@ from ai.app.prompt.prompt_builder import PromptBuilder
 from ai.app.services.ai_service import AIService
 from ai.app.agent.agent_router import AgentRouter
 from ai.app.agent.knowledge_agent import KnowledgeAgent
+from ai.app.agent.property_agent import PropertyAgent
+from ai.app.services.property_matching_service import PropertyMatchingService
 
 class InMemoryConversationStateRepository:
 
@@ -173,5 +175,10 @@ def service(
         knowledge_agent=KnowledgeAgent(
             llm_provider=llm_provider,
             prompt_builder=prompt_builder,
+        ),
+        property_agent=PropertyAgent(
+            property_matcher=PropertyMatchingService(
+                api_client=api_client,
+            ),
         ),
     )

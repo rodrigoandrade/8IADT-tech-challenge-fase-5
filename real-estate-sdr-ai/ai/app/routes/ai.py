@@ -17,6 +17,10 @@ from ai.app.repositories.knowledge_repository import KnowledgeRepository
 from ai.app.services.ai_service import AIService
 from ai.app.agent.agent_router import AgentRouter
 
+from ai.app.agent.property_agent import PropertyAgent
+from ai.app.services.property_matching_service import PropertyMatchingService
+
+
 router = APIRouter(
     prefix="/ai",
     tags=["AI"],
@@ -61,7 +65,15 @@ def get_ai_service(
         state_machine=ConversationStateMachine(),
         rag_service=rag_service,
         agent_router=AgentRouter(),
-        knowledge_agent=KnowledgeAgent(),
+        knowledge_agent=KnowledgeAgent(
+            llm_provider=OpenAIProvider(),
+            prompt_builder=PromptBuilder(),
+        ),
+        property_agent=PropertyAgent(
+            property_matcher=PropertyMatchingService(
+                api_client=RealEstateAPIClient(),
+            ),
+        ),
     )
 
 

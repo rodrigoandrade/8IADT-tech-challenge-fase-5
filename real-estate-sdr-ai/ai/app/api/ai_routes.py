@@ -18,6 +18,9 @@ from ai.app.repositories.knowledge_repository import KnowledgeRepository
 from ai.app.services.ai_service import AIService
 from ai.app.agent.agent_router import AgentRouter
 
+from ai.app.agent.property_agent import PropertyAgent
+from ai.app.services.property_matching_service import PropertyMatchingService
+
 router = APIRouter(
     prefix="/ai",
     tags=["AI"],
@@ -112,6 +115,11 @@ def get_ai_service(
         knowledge_agent=KnowledgeAgent(
             llm_provider=llm_provider,
             prompt_builder=prompt_builder,
+        ),
+        property_agent=PropertyAgent(
+            property_matcher=PropertyMatchingService(
+                api_client=real_estate_api_client,
+            ),
         ),
     )
 

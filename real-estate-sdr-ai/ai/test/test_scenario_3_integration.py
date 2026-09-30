@@ -17,6 +17,9 @@ from ai.app.services.ai_service import AIService
 from ai.app.agent.agent_router import AgentRouter
 from ai.app.agent.knowledge_agent import KnowledgeAgent
 
+from ai.app.agent.property_agent import PropertyAgent
+from ai.app.services.property_matching_service import PropertyMatchingService
+
 # ============================================================
 # FAKE STATE REPOSITORY
 # ============================================================
@@ -124,9 +127,21 @@ def create_service(
     repository,
     llm_provider,
 ):
+    api_client = FakeRealEstateAPIClient()
+
+    knowledge_agent = KnowledgeAgent(
+        llm_provider=llm_provider,
+        prompt_builder=PromptBuilder(),
+    )
+
+    property_agent = PropertyAgent(
+        property_matcher=PropertyMatchingService(
+            api_client=api_client,
+        )
+    )
 
     return AIService(
-        api_client=FakeRealEstateAPIClient(),
+        api_client=api_client,
         llm_provider=llm_provider,
         prompt_builder=PromptBuilder(),
         response_parser=ResponseParser(),
@@ -134,27 +149,8 @@ def create_service(
         state_machine=ConversationStateMachine(),
         rag_service=FakeRAGService(),
         agent_router=AgentRouter(),
-        knowledge_agent=KnowledgeAgent(),
-    )
-
-
-# ============================================================
-# CREATE SERVICE
-# ============================================================
-
-def create_service(
-    repository,
-    llm_provider,
-):
-
-    return AIService(
-        api_client=FakeRealEstateAPIClient(),
-        llm_provider=llm_provider,
-        prompt_builder=PromptBuilder(),
-        response_parser=ResponseParser(),
-        state_repository=repository,
-        state_machine=ConversationStateMachine(),
-        agent_router=AgentRouter(),
+        knowledge_agent=knowledge_agent,
+        property_agent=property_agent,
     )
 
 

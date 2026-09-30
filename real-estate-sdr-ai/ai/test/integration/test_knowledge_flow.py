@@ -11,6 +11,8 @@ from ai.app.models.conversation import (
 )
 from ai.app.prompt.prompt_builder import PromptBuilder
 from ai.app.services.ai_service import AIService
+from ai.app.agent.property_agent import PropertyAgent
+from ai.app.services.property_matching_service import PropertyMatchingService
 
 
 class FakeAPIClient:
@@ -131,6 +133,12 @@ async def test_knowledge_flow_uses_knowledge_agent(monkeypatch):
         prompt_builder=PromptBuilder(),
     )
 
+    property_agent = PropertyAgent(
+        property_matcher=PropertyMatchingService(
+            api_client=api_client,
+        )
+    )
+
     # ---------------------------------------------------------
     # AI Service
     # ---------------------------------------------------------
@@ -145,6 +153,7 @@ async def test_knowledge_flow_uses_knowledge_agent(monkeypatch):
         rag_service=rag_service,
         agent_router=AgentRouter(),
         knowledge_agent=knowledge_agent,
+        property_agent=property_agent,
     )
 
     # ---------------------------------------------------------
@@ -239,6 +248,12 @@ async def test_knowledge_flow_for_visit_question(monkeypatch):
         prompt_builder=PromptBuilder(),
     )
 
+    property_agent = PropertyAgent(
+        property_matcher=PropertyMatchingService(
+            api_client=api_client,
+        )
+    )
+
     service = AIService(
         api_client=api_client,
         llm_provider=llm_provider,
@@ -249,6 +264,7 @@ async def test_knowledge_flow_for_visit_question(monkeypatch):
         rag_service=rag_service,
         agent_router=AgentRouter(),
         knowledge_agent=knowledge_agent,
+        property_agent=property_agent,
     )
 
     monkeypatch.setattr(
@@ -298,6 +314,12 @@ async def test_knowledge_flow_for_regions_question(monkeypatch):
         prompt_builder=PromptBuilder(),
     )
 
+    property_agent = PropertyAgent(
+        property_matcher=PropertyMatchingService(
+            api_client=api_client,
+        )
+    )
+
     service = AIService(
         api_client=api_client,
         llm_provider=llm_provider,
@@ -308,6 +330,7 @@ async def test_knowledge_flow_for_regions_question(monkeypatch):
         rag_service=rag_service,
         agent_router=AgentRouter(),
         knowledge_agent=knowledge_agent,
+        property_agent=property_agent,
     )
 
     monkeypatch.setattr(
