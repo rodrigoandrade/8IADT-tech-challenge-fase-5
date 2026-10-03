@@ -82,59 +82,42 @@ class FollowUpService:
 
         return sent
 
-    async def process_conversation(
-        self,
-        conversation_id: str,
-    ) -> bool:
-        """
-        Processa uma única conversa.
-
-        Retorna True quando um follow-up foi enviado.
-        """
-
-        messages = await self.api_client.get_messages(
-            conversation_id
-        )
+    async def process_conversation(self, conversation_id: str) -> bool:
+        messages = await self.api_client.get_messages(conversation_id)
 
         if not messages:
             return False
 
-        last_message = messages[-1]
+        last_user_message = None
 
-        role = self._get_role(last_message)
+        for message in reversed(messages):
+            if self._get_role(message) == "USER":
+                last_user_message = message
+                break
 
-        # Só fazemos follow-up quando o lead
-        # enviou a última mensagem.
-        if role != "USER":
+        if last_user_message is None:
             return False
 
-        state = await self.state_repository.get(
-            conversation_id
-        )
+        state = await self.state_repository.get(conversation_id)
 
         if state is None:
             return False
 
-        # Não repetir follow-up.
         if state.follow_up_count >= self.max_follow_ups:
             return False
 
-        # Conversas finais não precisam de follow-up.
         if state.state in (
-            ConversationStateType.SCHEDULED,
-            ConversationStateType.COMPLETED,
-            ConversationStateType.LOST,
+                ConversationStateType.SCHEDULED,
+                ConversationStateType.COMPLETED,
+                ConversationStateType.LOST,
         ):
             return False
 
-        created_at = self._get_created_at(
-            last_message
-        )
+        created_at = self._get_created_at(last_user_message)
 
         if created_at is None:
             logger.warning(
-                "Message without created_at "
-                "conversation=%s",
+                "Mensagem do lead sem created_at. conversation_id=%s",
                 conversation_id,
             )
             return False
@@ -142,20 +125,10 @@ class FollowUpService:
         if not self._is_inactive(created_at):
             return False
 
-        # --------------------------------------------------
-        # Preserva o estado comercial ANTES do follow-up.
-        # --------------------------------------------------
-
         state.previous_state = state.state
         state.previous_next_action = state.next_action
 
-        # --------------------------------------------------
-        # Envia follow-up
-        # --------------------------------------------------
-
-        content = self._build_follow_up_message(
-            state
-        )
+        content = self._build_follow_up_message(state)
 
         await self.api_client.create_message(
             conversation_id=conversation_id,
@@ -163,21 +136,17 @@ class FollowUpService:
             content=content,
         )
 
-        # --------------------------------------------------
-        # Atualiza estado
-        # --------------------------------------------------
-
         state.follow_up_count += 1
         state.waiting_for_customer = True
-
         state.state = ConversationStateType.WAITING_LEAD
         state.next_action = None
 
         await self.state_repository.save(state)
 
         logger.info(
-            "Follow-up sent for conversation=%s",
+            "Follow-up enviado. conversation_id=%s follow_up_count=%s",
             conversation_id,
+            state.follow_up_count,
         )
 
         return True
