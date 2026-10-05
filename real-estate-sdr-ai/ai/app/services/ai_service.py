@@ -1,22 +1,31 @@
 from typing import Any
-
+from ai.app.agent.knowledge_agent import KnowledgeAgent
+from ai.app.agent.agent_type import AgentType
+from ai.app.agent.agent_router import AgentRouter
 from ai.app.agent.state import (
     ConversationFlow,
     ConversationState,
     ConversationStateType,
     NextAction,
 )
+
 from ai.app.agent.state_machine import ConversationStateMachine
 from ai.app.clients.real_estate_api_client import RealEstateAPIClient
 from ai.app.llm.provider import LLMProvider
 from ai.app.llm.response_parser import ResponseParser
-from ai.app.models.ai_response import AIResponse
 from ai.app.models.conversation import Conversation
 from ai.app.prompt.prompt_builder import PromptBuilder
+from ai.app.rag.rag_service import RAGService
 from ai.app.repositories.conversation_state_repository import (
     ConversationStateRepository,
 )
+from ai.app.models.ai_response import (
+    AIResponse,
+    LeadIntent,
+    LeadStatus,
+)
 
+from ai.app.agent.property_agent import PropertyAgent
 
 class AIService:
     """
@@ -27,6 +36,7 @@ class AIService:
     - recuperar o lead;
     - recuperar o estado da conversa;
     - interpretar a mensagem através do LLM;
+    - consultar a base de conhecimento via RAG;
     - atualizar a qualificação;
     - executar a máquina de estados;
     - buscar imóveis quando necessário;
@@ -37,13 +47,17 @@ class AIService:
     """
 
     def __init__(
-        self,
-        api_client: RealEstateAPIClient,
-        llm_provider: LLMProvider,
-        prompt_builder: PromptBuilder,
-        response_parser: ResponseParser,
-        state_repository: ConversationStateRepository,
-        state_machine: ConversationStateMachine,
+            self,
+            api_client: RealEstateAPIClient,
+            llm_provider: LLMProvider,
+            prompt_builder: PromptBuilder,
+            response_parser: ResponseParser,
+            state_repository: ConversationStateRepository,
+            state_machine: ConversationStateMachine,
+            rag_service: RAGService,
+            agent_router: AgentRouter,
+            knowledge_agent: KnowledgeAgent,
+            property_agent: PropertyAgent,
     ):
         self.api_client = api_client
         self.llm_provider = llm_provider
@@ -51,6 +65,10 @@ class AIService:
         self.response_parser = response_parser
         self.state_repository = state_repository
         self.state_machine = state_machine
+        self.rag_service = rag_service
+        self.agent_router = agent_router
+        self.knowledge_agent = knowledge_agent
+        self.property_agent = property_agent
 
     async def generate_response(
         self,
@@ -78,7 +96,21 @@ class AIService:
             )
 
         # ==============================================================
-        # 1. Buscar lead
+        # 1.5. Identificar o agente responsável
+        # ==============================================================
+
+        agent_type = self.agent_router.route(
+            lead_message.content
+        )
+
+        print(
+            f"[AGENT ROUTER] "
+            f"message='{lead_message.content}' "
+            f"agent='{agent_type.value}'"
+        )
+
+        # ==============================================================
+        # 1.6. Buscar lead
         # ==============================================================
 
         lead = await self.api_client.get_lead(
@@ -128,7 +160,47 @@ class AIService:
         # da mensagem atual e a State Machine determinar MATCH_PROPERTY.
 
         # ==============================================================
-        # 5. Construir prompt
+        # 5. Knowledge Agent
+        # ==============================================================
+
+        knowledge: list[dict[str, Any]] = []
+
+        if agent_type == AgentType.KNOWLEDGE:
+            from ai.app.infrastructure.database import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as session:
+                knowledge_response = await self.knowledge_agent.execute(
+                    rag_service=self.rag_service,
+                    session=session,
+                    question=lead_message.content,
+                )
+
+            print("\n========== KNOWLEDGE AGENT ==========")
+            print(knowledge_response)
+            print("=====================================\n")
+
+            response = AIResponse(
+                message=knowledge_response.message,
+                intent=LeadIntent.GENERAL_INQUIRY,
+                lead_status=LeadStatus.CONTACTED,
+                qualification_score=state.qualification_score,
+                next_action=None,
+                reasoning=None,
+                metadata={},
+                transaction_type=knowledge_response.transaction_type,
+                qualification={},
+            )
+
+            await self.state_repository.save(state)
+
+            return self._build_response(
+                state=state,
+                response=response,
+                matched_properties=[],
+            )
+
+        # ==============================================================
+        # 6. Construir prompt
         # ==============================================================
 
         prompt = self.prompt_builder.build(
@@ -137,10 +209,11 @@ class AIService:
             properties=properties,
             matched_properties=[],
             state=state,
+            knowledge=knowledge,
         )
 
         # ==============================================================
-        # 6. Executar LLM
+        # 7. Executar LLM
         # ==============================================================
 
         llm_response = await self.llm_provider.generate_response(
@@ -152,7 +225,7 @@ class AIService:
         print("==================================\n")
 
         # ==============================================================
-        # 7. Parsear resposta
+        # 8. Parsear resposta
         # ==============================================================
 
         response = self.response_parser.parse(
@@ -160,7 +233,7 @@ class AIService:
         )
 
         # ==============================================================
-        # 8. Atualizar estado com dados extraídos
+        # 9. Atualizar estado com dados extraídos
         # ==============================================================
 
         state = self._update_state_from_llm(
@@ -169,7 +242,7 @@ class AIService:
         )
 
         # ==============================================================
-        # 9. State Machine
+        # 10. State Machine
         # ==============================================================
 
         state = self.state_machine.transition(
@@ -182,19 +255,20 @@ class AIService:
         )
 
         # ==============================================================
-        # 10. Matching de imóveis
+        # 11. Matching de imóveis
         # ==============================================================
 
         matched_properties: list[dict[str, Any]] = []
 
         if state.next_action == NextAction.MATCH_PROPERTY:
 
-            matched_properties = await self._match_properties(
-                state
+            property_response = await self.property_agent.execute(
+                state=state
             )
 
-            if matched_properties:
+            matched_properties = property_response.matched_properties
 
+            if matched_properties:
                 state = self._apply_property_match(
                     state=state,
                     matched_properties=matched_properties,
@@ -205,28 +279,22 @@ class AIService:
                 )
 
         # ==============================================================
-        # 11. Recomendação
+        # 12. Recomendação
         # ==============================================================
 
         if state.next_action == NextAction.RECOMMEND_PROPERTY:
 
             # A State Machine pode chegar diretamente em
             # RECOMMEND_PROPERTY sem passar por MATCH_PROPERTY.
-            #
-            # Nesse caso, matched_properties ainda estará vazio.
-            # Como a aplicação é responsável pelo matching,
-            # garantimos que os imóveis sejam buscados aqui.
 
             if not matched_properties:
-
-                matched_properties = await self._match_properties(
-                    state
+                property_response = await self.property_agent.execute(
+                    state=state
                 )
 
-            if matched_properties:
+                matched_properties = property_response.matched_properties
 
-                # Garante que o primeiro imóvel encontrado
-                # seja registrado como imóvel selecionado.
+            if matched_properties:
                 state = self._apply_property_match(
                     state=state,
                     matched_properties=matched_properties,
@@ -240,7 +308,7 @@ class AIService:
                 )
 
         # ==============================================================
-        # 12. Caso não tenha encontrado imóveis
+        # 13. Caso não tenha encontrado imóveis
         # ==============================================================
 
         if (
@@ -253,7 +321,7 @@ class AIService:
             )
 
         # ==============================================================
-        # 13. Persistir estado
+        # 14. Persistir estado
         # ==============================================================
 
         await self.state_repository.save(
@@ -261,7 +329,7 @@ class AIService:
         )
 
         # ==============================================================
-        # 14. Persistir resposta do assistant
+        # 15. Persistir resposta do assistant
         # ==============================================================
 
         # await self._persist_assistant_message(
@@ -270,7 +338,7 @@ class AIService:
         # )
 
         # ==============================================================
-        # 15. Retornar
+        # 16. Retornar
         # ==============================================================
 
         return self._build_response(
@@ -517,97 +585,6 @@ class AIService:
     # PROPERTY MATCHING
     # ==================================================================
 
-    async def _match_properties(
-        self,
-        state: ConversationState,
-    ) -> list[dict[str, Any]]:
-
-        properties = await self.api_client.get_properties()
-
-        print("\n========== PROPERTY MATCH ==========")
-        print(f"Total properties: {len(properties)}")
-        print(f"property_type: {state.property_type}")
-        print(f"budget: {state.budget}")
-        print(f"bedrooms: {state.bedrooms}")
-        print(f"region: {state.region}")
-
-        matched: list[dict[str, Any]] = []
-
-        for property_data in properties:
-
-            property_id = property_data.get("id")
-            title = property_data.get("title")
-
-            available = self._is_available(
-                property_data
-            )
-
-            property_type = self._matches_property_type(
-                property_data,
-                state.property_type,
-            )
-
-            budget = self._matches_budget(
-                property_data,
-                state.budget,
-            )
-
-            bedrooms = self._matches_bedrooms(
-                property_data,
-                state.bedrooms,
-            )
-
-            region = self._matches_region(
-                property_data,
-                state.region,
-            )
-
-            print(
-                f"\nProperty: {title}"
-                f"\n  id: {property_id}"
-                f"\n  available: {available}"
-                f"\n  property_type: {property_type}"
-                f"\n  budget: {budget}"
-                f"\n  bedrooms: {bedrooms}"
-                f"\n  region: {region}"
-            )
-
-            if not available:
-                continue
-
-            if not property_type:
-                continue
-
-            if not budget:
-                continue
-
-            if not bedrooms:
-                continue
-
-            if not region:
-                continue
-
-            matched.append(
-                property_data
-            )
-
-        matched.sort(
-            key=self._property_price
-        )
-
-        result = matched[:3]
-
-        print("\n========== MATCHED ==========")
-
-        for property_data in result:
-            print(
-                property_data.get("title"),
-                property_data.get("price"),
-            )
-
-        print("=============================\n")
-
-        return result
 
     def _apply_property_match(
         self,
@@ -633,224 +610,7 @@ class AIService:
     # ==================================================================
     # PROPERTY FILTERS
     # ==================================================================
-
-    @staticmethod
-    def _is_available(
-        property_data: dict[str, Any],
-    ) -> bool:
-
-        status = property_data.get("status")
-
-        if status is not None:
-            return str(status).strip().upper() == "AVAILABLE"
-
-        available = property_data.get(
-            "available",
-            True,
-        )
-
-        if isinstance(available, str):
-            return available.strip().lower() in {
-                "true",
-                "1",
-                "yes",
-                "sim",
-            }
-
-        return bool(available)
-
-    def _matches_property_type(
-        self,
-        property_data: dict[str, Any],
-        property_type: str | None,
-    ) -> bool:
-
-        if not property_type:
-            return True
-
-        actual = property_data.get("property_type")
-
-        if actual is None:
-            actual = property_data.get("type")
-
-        if not actual:
-            return False
-
-        normalized_actual = self._normalize(
-            str(actual)
-        )
-
-        normalized_requested = self._normalize(
-            property_type
-        )
-
-        aliases = {
-            "apartamento": {
-                "apartamento",
-                "apartment",
-            },
-            "casa": {
-                "casa",
-                "house",
-            },
-            "terreno": {
-                "terreno",
-                "land",
-            },
-            "sala comercial": {
-                "sala comercial",
-                "commercial room",
-            },
-        }
-
-        allowed = aliases.get(
-            normalized_requested
-        )
-
-        if allowed:
-            return normalized_actual in allowed
-
-        return normalized_actual == normalized_requested
-
-    @staticmethod
-    def _matches_budget(
-        property_data: dict[str, Any],
-        budget: float | None,
-    ) -> bool:
-
-        if budget is None:
-            return True
-
-        price = property_data.get(
-            "price"
-        )
-
-        if price is None:
-            return False
-
-        try:
-            return float(price) <= float(budget)
-
-        except (TypeError, ValueError):
-            return False
-
-    @staticmethod
-    def _matches_bedrooms(
-        property_data: dict[str, Any],
-        bedrooms: int | None,
-    ) -> bool:
-
-        if bedrooms is None:
-            return True
-
-        value = property_data.get(
-            "bedrooms"
-        )
-
-        if value is None:
-            return False
-
-        try:
-            return int(value) >= int(bedrooms)
-
-        except (TypeError, ValueError):
-            return False
-
-    def _matches_region(
-        self,
-        property_data: dict[str, Any],
-        region: str | None,
-    ) -> bool:
-
-        if not region:
-            return True
-
-        normalized_region = self._normalize(
-            region
-        )
-
-        city = self._normalize(
-            str(
-                property_data.get(
-                    "city",
-                    "",
-                )
-            )
-        )
-
-        neighborhood = self._normalize(
-            str(
-                property_data.get(
-                    "neighborhood",
-                    "",
-                )
-            )
-        )
-
-        address = self._normalize(
-            str(
-                property_data.get(
-                    "address",
-                    "",
-                )
-            )
-        )
-
-        title = self._normalize(
-            str(
-                property_data.get(
-                    "title",
-                    "",
-                )
-            )
-        )
-
-        searchable = " ".join(
-            [
-                city,
-                neighborhood,
-                address,
-                title,
-            ]
-        )
-
-        if normalized_region in searchable:
-            return True
-
-        if normalized_region in {
-            "zona sul",
-            "sul",
-        }:
-
-            south_neighborhoods = {
-                "moema",
-                "vila mariana",
-                "saude",
-                "campo belo",
-                "campo grande",
-                "santo amaro",
-                "ipiranga",
-                "brooklin",
-                "morumbi",
-                "vila andrade",
-                "chacara flora",
-            }
-
-            normalized_neighborhood = (
-                self._normalize(
-                    neighborhood
-                )
-            )
-
-            return normalized_neighborhood in {
-                self._normalize(
-                    neighborhood_name
-                )
-                for neighborhood_name
-                in south_neighborhoods
-            }
-
-        return False
+    # ==================================================================
 
     # ==================================================================
     # PROPERTY RECOMMENDATION
@@ -1045,39 +805,6 @@ class AIService:
 
         return str(value)
 
-    @staticmethod
-    def _property_price(
-        property_data: dict[str, Any],
-    ) -> float:
-
-        value = property_data.get(
-            "price",
-            0,
-        )
-
-        try:
-            return float(value)
-
-        except (TypeError, ValueError):
-            return 0.0
-
-    @staticmethod
-    def _normalize(
-        value: str,
-    ) -> str:
-
-        import unicodedata
-
-        normalized = unicodedata.normalize(
-            "NFD",
-            value.lower().strip(),
-        )
-
-        return "".join(
-            character
-            for character in normalized
-            if unicodedata.category(character) != "Mn"
-        )
 
     @staticmethod
     def _enum_value(

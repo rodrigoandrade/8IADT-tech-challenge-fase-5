@@ -1,16 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from ai.app.agent.knowledge_agent import KnowledgeAgent
 
-from app.infrastructure.database import get_session
-from app.infrastructure.repositories.postgres_conversation_state_repository import (
+from ai.app.agent.state_machine import ConversationStateMachine
+from ai.app.clients.real_estate_api_client import RealEstateAPIClient
+from ai.app.infrastructure.database import get_session
+from ai.app.infrastructure.repositories.postgres_conversation_state_repository import (
     PostgresConversationStateRepository,
 )
-from app.services.ai_service import AIService
-from app.llm.openai_provider import OpenAIProvider
-from app.prompt.prompt_builder import PromptBuilder
-from app.llm.response_parser import ResponseParser
-from app.agent.state_machine import ConversationStateMachine
-from app.clients.real_estate_api_client import RealEstateAPIClient
+from ai.app.llm.openai_provider import OpenAIProvider
+from ai.app.llm.response_parser import ResponseParser
+from ai.app.prompt.prompt_builder import PromptBuilder
+from ai.app.rag.embeddings import EmbeddingService
+from ai.app.rag.rag_service import RAGService
+from ai.app.repositories.knowledge_repository import KnowledgeRepository
+from ai.app.services.ai_service import AIService
+from ai.app.agent.agent_router import AgentRouter
+
+from ai.app.agent.property_agent import PropertyAgent
+from ai.app.services.property_matching_service import PropertyMatchingService
 
 
 router = APIRouter(
@@ -23,9 +31,30 @@ def get_ai_service(
     session: AsyncSession = Depends(get_session),
 ) -> AIService:
 
+    # -----------------------------------------------------
+    # State repository
+    # -----------------------------------------------------
+
     state_repository = PostgresConversationStateRepository(
         session
     )
+
+    # -----------------------------------------------------
+    # RAG
+    # -----------------------------------------------------
+
+    embedding_service = EmbeddingService()
+
+    knowledge_repository = KnowledgeRepository()
+
+    rag_service = RAGService(
+        embedding_service=embedding_service,
+        knowledge_repository=knowledge_repository,
+    )
+
+    # -----------------------------------------------------
+    # AI Service
+    # -----------------------------------------------------
 
     return AIService(
         api_client=RealEstateAPIClient(),
@@ -34,6 +63,17 @@ def get_ai_service(
         response_parser=ResponseParser(),
         state_repository=state_repository,
         state_machine=ConversationStateMachine(),
+        rag_service=rag_service,
+        agent_router=AgentRouter(),
+        knowledge_agent=KnowledgeAgent(
+            llm_provider=OpenAIProvider(),
+            prompt_builder=PromptBuilder(),
+        ),
+        property_agent=PropertyAgent(
+            property_matcher=PropertyMatchingService(
+                api_client=RealEstateAPIClient(),
+            ),
+        ),
     )
 
 
