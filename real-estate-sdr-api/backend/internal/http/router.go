@@ -8,6 +8,8 @@ import (
 
 	"real-estate-sdr/internal/application"
 	"real-estate-sdr/internal/http/handler"
+	"real-estate-sdr/internal/http/middleware"
+	"real-estate-sdr/internal/observability"
 )
 
 func NewRouter(
@@ -18,11 +20,13 @@ func NewRouter(
 	pool *pgxpool.Pool,
 ) http.Handler {
 	mux := http.NewServeMux()
+	metrics := observability.NewMetrics()
 
 	leadHandler := handler.NewLeadHandler(leadService)
 	propertyHandler := handler.NewPropertyHandler(propertyService)
 	conversationHandler := handler.NewConversationHandler(conversationService)
 	messageHandler := handler.NewMessageHandler(messageService)
+	metricsHandler := handler.NewMetricsHandler(metrics)
 
 	// =========================================================
 	// LEADS
@@ -37,6 +41,11 @@ func NewRouter(
 	mux.HandleFunc(
 		"GET /leads/{id}/conversations",
 		conversationHandler.ListByLead,
+	)
+
+	mux.HandleFunc(
+		"GET /metrics",
+		metricsHandler.Get,
 	)
 
 	// =========================================================
@@ -173,7 +182,12 @@ func NewRouter(
 		},
 	)
 
-	return mux
+	return middleware.CorrelationID(
+		middleware.Observability(
+			metrics,
+			mux,
+		),
+	)
 }
 
 func writeJSON(
