@@ -18,9 +18,17 @@ func NewRouter(
 	conversationService *application.ConversationService,
 	messageService *application.MessageService,
 	pool *pgxpool.Pool,
+	metricsArgs ...*observability.Metrics,
 ) http.Handler {
+	var metrics *observability.Metrics
+
+	if len(metricsArgs) > 0 && metricsArgs[0] != nil {
+		metrics = metricsArgs[0]
+	} else {
+		metrics = observability.NewMetrics()
+	}
+
 	mux := http.NewServeMux()
-	metrics := observability.NewMetrics()
 
 	leadHandler := handler.NewLeadHandler(leadService)
 	propertyHandler := handler.NewPropertyHandler(propertyService)
@@ -32,16 +40,39 @@ func NewRouter(
 	// LEADS
 	// =========================================================
 
-	mux.HandleFunc("POST /leads", leadHandler.Create)
-	mux.HandleFunc("GET /leads", leadHandler.List)
-	mux.HandleFunc("GET /leads/{id}", leadHandler.GetByID)
-	mux.HandleFunc("PUT /leads/{id}", leadHandler.Update)
-	mux.HandleFunc("PATCH /leads/{id}/status", leadHandler.UpdateStatus)
+	mux.HandleFunc(
+		"POST /leads",
+		leadHandler.Create,
+	)
+
+	mux.HandleFunc(
+		"GET /leads",
+		leadHandler.List,
+	)
+
+	mux.HandleFunc(
+		"GET /leads/{id}",
+		leadHandler.GetByID,
+	)
+
+	mux.HandleFunc(
+		"PUT /leads/{id}",
+		leadHandler.Update,
+	)
+
+	mux.HandleFunc(
+		"PATCH /leads/{id}/status",
+		leadHandler.UpdateStatus,
+	)
 
 	mux.HandleFunc(
 		"GET /leads/{id}/conversations",
 		conversationHandler.ListByLead,
 	)
+
+	// =========================================================
+	// METRICS
+	// =========================================================
 
 	mux.HandleFunc(
 		"GET /metrics",
@@ -52,10 +83,26 @@ func NewRouter(
 	// PROPERTIES
 	// =========================================================
 
-	mux.HandleFunc("POST /properties", propertyHandler.Create)
-	mux.HandleFunc("GET /properties", propertyHandler.List)
-	mux.HandleFunc("GET /properties/{id}", propertyHandler.GetByID)
-	mux.HandleFunc("PUT /properties/{id}", propertyHandler.Update)
+	mux.HandleFunc(
+		"POST /properties",
+		propertyHandler.Create,
+	)
+
+	mux.HandleFunc(
+		"GET /properties",
+		propertyHandler.List,
+	)
+
+	mux.HandleFunc(
+		"GET /properties/{id}",
+		propertyHandler.GetByID,
+	)
+
+	mux.HandleFunc(
+		"PUT /properties/{id}",
+		propertyHandler.Update,
+	)
+
 	mux.HandleFunc(
 		"PATCH /properties/{id}/status",
 		propertyHandler.UpdateStatus,
@@ -181,6 +228,10 @@ func NewRouter(
 			)
 		},
 	)
+
+	// =========================================================
+	// MIDDLEWARE
+	// =========================================================
 
 	return middleware.CorrelationID(
 		middleware.Observability(

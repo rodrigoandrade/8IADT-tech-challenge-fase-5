@@ -55,7 +55,7 @@ func TestMetricsHandlerGet(t *testing.T) {
 		)
 	}
 
-	expected := `{"RequestsTotal":2,"RequestsSuccess":2,"RequestsError":0,"AverageDurationMs":200}` + "\n"
+	expected := `{"RequestsTotal":2,"RequestsSuccess":2,"RequestsError":0,"AverageDurationMs":200,"PropertyMatchAttempts":0,"PropertyMatchSuccess":0,"PropertyMatchNotFound":0}` + "\n"
 
 	if response.Body.String() != expected {
 		t.Fatalf(
