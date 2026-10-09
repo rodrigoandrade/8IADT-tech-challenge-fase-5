@@ -6,14 +6,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"real-estate-sdr/internal/infrastructure/ai"
 	"syscall"
 	"time"
 
 	"real-estate-sdr/internal/application"
 	web "real-estate-sdr/internal/http"
+	"real-estate-sdr/internal/infrastructure/ai"
 	"real-estate-sdr/internal/infrastructure/postgres"
 	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
+	"real-estate-sdr/internal/observability"
 )
 
 func main() {
@@ -49,12 +50,8 @@ func main() {
 	//
 	//     /app/api migrate
 	//
-	// Atualmente o projeto não possui um mecanismo de migration
-	// implementado em Go. Portanto, neste modo apenas validamos
-	// que o banco está acessível e encerramos com sucesso.
-	//
-	// As migrations/schema devem ser executadas pela infraestrutura
-	// do PostgreSQL.
+	// As migrations são executadas pela infraestrutura
+	// PostgreSQL.
 	//
 
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
@@ -92,6 +89,14 @@ func main() {
 	)
 
 	// =========================================================
+	// OBSERVABILITY
+	// =========================================================
+
+	// Uma única instância de métricas é compartilhada
+	// entre os serviços e o endpoint /metrics.
+	metrics := observability.NewMetrics()
+
+	// =========================================================
 	// SERVICES
 	// =========================================================
 
@@ -112,12 +117,16 @@ func main() {
 		log.Fatal("AI_SERVICE_URL is not configured")
 	}
 
-	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+	aiService := ai.NewHTTPClient(
+		aiServiceURL,
+		nil,
+	)
 
 	messageService := application.NewMessageService(
 		messageRepository,
 		conversationRepository,
 		aiService,
+		metrics,
 	)
 
 	// =========================================================
@@ -130,6 +139,7 @@ func main() {
 		conversationService,
 		messageService,
 		pool,
+		metrics,
 	)
 
 	// =========================================================

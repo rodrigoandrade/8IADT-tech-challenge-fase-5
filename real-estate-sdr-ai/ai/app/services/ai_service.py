@@ -249,6 +249,15 @@ class AIService:
             state
         )
 
+        print("\n========== STATE AFTER TRANSITION ==========")
+        print("state.state =", state.state)
+        print("state.next_action =", state.next_action)
+        print("state.budget =", state.budget)
+        print("state.bedrooms =", state.bedrooms)
+        print("state.region =", state.region)
+        print("state.urgency =", state.urgency)
+        print("============================================\n")
+
         response = self._enforce_next_action_message(
             response=response,
             state=state,

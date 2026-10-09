@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"real-estate-sdr/internal/domain"
+	"real-estate-sdr/internal/observability"
 	"real-estate-sdr/internal/repository"
 )
 
@@ -12,17 +13,27 @@ type MessageService struct {
 	messageRepository      repository.MessageRepository
 	conversationRepository repository.ConversationRepository
 	aiService              AIService
+	metrics                *observability.Metrics
 }
 
 func NewMessageService(
 	messageRepository repository.MessageRepository,
 	conversationRepository repository.ConversationRepository,
 	aiService AIService,
+	metrics ...*observability.Metrics,
 ) *MessageService {
+
+	var metricsInstance *observability.Metrics
+
+	if len(metrics) > 0 && metrics[0] != nil {
+		metricsInstance = metrics[0]
+	}
+
 	return &MessageService{
 		messageRepository:      messageRepository,
 		conversationRepository: conversationRepository,
 		aiService:              aiService,
+		metrics:                metricsInstance,
 	}
 }
 
@@ -110,7 +121,17 @@ func (s *MessageService) CreateAndGenerateResponse(
 		return nil, errors.New("AI service returned an empty response")
 	}
 
-	// 5. Persiste a resposta do assistente.
+	// 5. Registra métricas de matching de imóveis.
+	//
+	// Só contabiliza quando o AI Service informou
+	// explicitamente MatchedProperties.
+	if s.metrics != nil && aiResponse.MatchedProperties != nil {
+		s.metrics.RecordPropertyMatch(
+			len(aiResponse.MatchedProperties) > 0,
+		)
+	}
+
+	// 6. Persiste a resposta do assistente.
 	assistantMessage := &domain.Message{
 		ConversationID: message.ConversationID,
 		Role:           domain.MessageRoleAssistant,

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"real-estate-sdr/internal/domain"
+	"real-estate-sdr/internal/http/middleware"
 )
 
 type HTTPClient struct {
@@ -93,6 +94,15 @@ func (c *HTTPClient) GenerateResponse(
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+
+	correlationID := middleware.GetCorrelationID(ctx)
+
+	if correlationID != "" {
+		req.Header.Set(
+			"X-Correlation-ID",
+			correlationID,
+		)
+	}
 
 	response, err := c.httpClient.Do(req)
 	if err != nil {
