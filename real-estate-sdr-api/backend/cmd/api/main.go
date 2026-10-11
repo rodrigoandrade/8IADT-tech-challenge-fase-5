@@ -11,6 +11,7 @@ import (
 
 	"real-estate-sdr/internal/application"
 	web "real-estate-sdr/internal/http"
+	"real-estate-sdr/internal/http/middleware"
 	"real-estate-sdr/internal/infrastructure/ai"
 	"real-estate-sdr/internal/infrastructure/postgres"
 	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
@@ -45,15 +46,6 @@ func main() {
 	// =========================================================
 	// MIGRATION MODE
 	// =========================================================
-	//
-	// Docker executa:
-	//
-	//     /app/api migrate
-	//
-	// As migrations são executadas pela infraestrutura
-	// PostgreSQL.
-	//
-
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		migrator := postgres.NewMigrator(pool)
 
@@ -62,8 +54,20 @@ func main() {
 		}
 
 		log.Println("migrations completed successfully")
-
 		return
+	}
+
+	// =========================================================
+	// HTTP API SECURITY
+	// =========================================================
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		log.Fatal("API_KEY is not configured")
+	}
+
+	aiServiceAPIKey := os.Getenv("AI_SERVICE_API_KEY")
+	if aiServiceAPIKey == "" {
+		log.Fatal("AI_SERVICE_API_KEY is not configured")
 	}
 
 	// =========================================================
@@ -120,6 +124,7 @@ func main() {
 	aiService := ai.NewHTTPClient(
 		aiServiceURL,
 		nil,
+		aiServiceAPIKey,
 	)
 
 	messageService := application.NewMessageService(
@@ -142,6 +147,11 @@ func main() {
 		metrics,
 	)
 
+	protectedRouter := middleware.APIKey(
+		apiKey,
+		router,
+	)
+
 	// =========================================================
 	// HTTP SERVER
 	// =========================================================
@@ -157,7 +167,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           router,
+		Handler:           protectedRouter,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

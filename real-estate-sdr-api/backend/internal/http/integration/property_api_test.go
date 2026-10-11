@@ -3,12 +3,10 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"real-estate-sdr/internal/infrastructure/ai"
 	"testing"
 	"time"
 
@@ -44,7 +42,7 @@ type propertyResponse struct {
 
 func TestPropertyAPI_CreateAndGet(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	propertyID := uuid.Nil
 
@@ -246,7 +244,7 @@ func TestPropertyAPI_CreateAndGet(t *testing.T) {
 
 func TestPropertyAPI_List(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	property := createTestProperty(
 		t,
@@ -312,7 +310,7 @@ func TestPropertyAPI_List(t *testing.T) {
 
 func TestPropertyAPI_Update(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	property := createTestProperty(
 		t,
@@ -423,7 +421,7 @@ func TestPropertyAPI_Update(t *testing.T) {
 
 func TestPropertyAPI_UpdateStatus(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	property := createTestProperty(
 		t,
@@ -490,7 +488,7 @@ func TestPropertyAPI_UpdateStatus(t *testing.T) {
 
 func TestPropertyAPI_NotFound(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	id := uuid.New()
 
@@ -519,7 +517,7 @@ func TestPropertyAPI_NotFound(t *testing.T) {
 
 func TestPropertyAPI_Create_InvalidJSON(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -551,7 +549,7 @@ func TestPropertyAPI_Create_InvalidJSON(t *testing.T) {
 
 func TestPropertyAPI_Create_EmptyBody(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -583,7 +581,7 @@ func TestPropertyAPI_Create_EmptyBody(t *testing.T) {
 
 func TestPropertyAPI_Create_InvalidProperty(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	tests := []struct {
 		name string
@@ -707,7 +705,7 @@ func TestPropertyAPI_Create_InvalidProperty(t *testing.T) {
 
 func TestPropertyAPI_GetByID_InvalidID(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -734,7 +732,7 @@ func TestPropertyAPI_GetByID_InvalidID(t *testing.T) {
 
 func TestPropertyAPI_Update_InvalidID(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodPut,
@@ -766,7 +764,7 @@ func TestPropertyAPI_Update_InvalidID(t *testing.T) {
 
 func TestPropertyAPI_UpdateStatus_InvalidID(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodPatch,
@@ -798,7 +796,7 @@ func TestPropertyAPI_UpdateStatus_InvalidID(t *testing.T) {
 
 func TestPropertyAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	pool := newPropertyTestPool(t)
-	router := newPropertyTestRouter(pool)
+	router := newPropertyTestRouter(t, pool)
 
 	property := createTestProperty(
 		t,
@@ -841,8 +839,10 @@ func TestPropertyAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 }
 
 func newPropertyTestRouter(
+	t *testing.T,
 	pool *pgxpool.Pool,
 ) http.Handler {
+	t.Helper()
 	queries := generated.New(pool)
 
 	propertyRepository := postgres.NewPropertyRepository(
@@ -865,12 +865,7 @@ func newPropertyTestRouter(
 		queries,
 	)
 
-	aiServiceURL := os.Getenv("AI_SERVICE_URL")
-	if aiServiceURL == "" {
-		log.Fatal("AI_SERVICE_URL is not configured")
-	}
-
-	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+	aiService := newTestAIClient(t)
 
 	messageService := application.NewMessageService(
 		messageRepository,

@@ -18,7 +18,7 @@ func TestLeadAPI_CreateConcurrent(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	const totalRequests = 20
 
@@ -219,7 +219,7 @@ func TestLeadAPI_CreateConcurrent_DifferentEmails(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	const totalRequests = 10
 
@@ -319,5 +319,5 @@ func TestLeadAPI_CreateConcurrent_DifferentEmails(t *testing.T) {
 }
 
 // Evita que o compilador reclame caso o pool seja utilizado
-// apenas em futuras extensões do teste.
+// apenas em futuras extensÃµes do teste.
 var _ *pgxpool.Pool

@@ -8,6 +8,8 @@ from ai.app.observability.context import (
 
 import logging
 
+import os
+
 logger = logging.getLogger(__name__)
 
 class RealEstateAPIClient:
@@ -23,9 +25,15 @@ class RealEstateAPIClient:
         self,
         base_url: str,
         timeout: float = 10.0,
+        api_key: str | None = None,
     ):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._api_key = (
+            api_key
+            if api_key is not None
+            else os.getenv("REAL_ESTATE_API_KEY", "")
+        )
 
     async def create_message(
         self,
@@ -209,11 +217,14 @@ class RealEstateAPIClient:
             ) from exc
 
     def _headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+
         correlation_id = get_correlation_id()
 
-        if not correlation_id:
-            return {}
+        if correlation_id:
+            headers["X-Correlation-ID"] = correlation_id
 
-        return {
-            "X-Correlation-ID": correlation_id,
-        }
+        return headers

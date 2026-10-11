@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -16,11 +17,13 @@ import (
 type HTTPClient struct {
 	baseURL    string
 	httpClient *http.Client
+	apiKey     string
 }
 
 func NewHTTPClient(
 	baseURL string,
 	httpClient *http.Client,
+	apiKeys ...string,
 ) *HTTPClient {
 	if httpClient == nil {
 		httpClient = &http.Client{
@@ -28,9 +31,15 @@ func NewHTTPClient(
 		}
 	}
 
+	var apiKey string
+	if len(apiKeys) > 0 {
+		apiKey = apiKeys[0]
+	}
+
 	return &HTTPClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		httpClient: httpClient,
+		apiKey:     apiKey,
 	}
 }
 
@@ -56,6 +65,12 @@ func (c *HTTPClient) GenerateResponse(
 
 	if strings.TrimSpace(c.baseURL) == "" {
 		return nil, fmt.Errorf("AI service URL is not configured")
+	}
+
+	if c.apiKey == "" {
+		return nil, fmt.Errorf(
+			"AI service API key is not configured",
+		)
 	}
 
 	request := generateResponseRequest{
@@ -95,6 +110,11 @@ func (c *HTTPClient) GenerateResponse(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
+	req.Header.Set(
+		"X-Internal-API-Key",
+		c.apiKey,
+	)
+
 	correlationID := middleware.GetCorrelationID(ctx)
 
 	if correlationID != "" {
@@ -112,9 +132,31 @@ func (c *HTTPClient) GenerateResponse(
 	defer response.Body.Close()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		errorBody, readErr := io.ReadAll(
+			io.LimitReader(response.Body, 4096),
+		)
+
+		if readErr != nil {
+			return nil, fmt.Errorf(
+				"AI service returned status %d; failed to read error body: %w",
+				response.StatusCode,
+				readErr,
+			)
+		}
+
+		detail := strings.TrimSpace(string(errorBody))
+
+		if detail == "" {
+			return nil, fmt.Errorf(
+				"AI service returned status %d with empty error body",
+				response.StatusCode,
+			)
+		}
+
 		return nil, fmt.Errorf(
-			"AI service returned status %d",
+			"AI service returned status %d: %s",
 			response.StatusCode,
+			detail,
 		)
 	}
 
