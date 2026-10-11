@@ -12,12 +12,12 @@ func TestLeadAPI_Create_InvalidJSON(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/leads",
-		strings.NewReader(`{"name":"João Silva"`),
+		strings.NewReader(`{"name":"JoÃ£o Silva"`),
 	)
 
 	request.Header.Set(
@@ -43,7 +43,7 @@ func TestLeadAPI_Create_EmptyBody(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -127,7 +127,7 @@ func TestLeadAPI_Create_InvalidLead(t *testing.T) {
 			pool := newTestPool(t)
 			defer pool.Close()
 
-			router := newTestRouter(pool)
+			router := newTestRouter(t, pool)
 
 			request := httptest.NewRequest(
 				http.MethodPost,
@@ -160,7 +160,7 @@ func TestLeadAPI_GetByID_InvalidID(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -186,7 +186,7 @@ func TestLeadAPI_Update_InvalidID(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	body := `{
 		"name": "Updated Lead",
@@ -224,7 +224,7 @@ func TestLeadAPI_Update_InvalidJSON(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodPut,
@@ -255,7 +255,7 @@ func TestLeadAPI_UpdateStatus_InvalidID(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	body := `{
 		"status": "QUALIFIED"
@@ -290,7 +290,7 @@ func TestLeadAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	body := `{
 		"status": "INVALID_STATUS"
@@ -325,7 +325,7 @@ func TestLeadAPI_UpdateStatus_InvalidJSON(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodPatch,
@@ -356,7 +356,7 @@ func TestLeadAPI_UpdateStatus_NotFound(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	body := `{
 		"status": "QUALIFIED"
@@ -391,7 +391,7 @@ func TestLeadAPI_Update_NotFound(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	body := `{
 		"name": "Updated Lead",

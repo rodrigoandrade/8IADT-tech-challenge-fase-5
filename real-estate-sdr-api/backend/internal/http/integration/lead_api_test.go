@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"real-estate-sdr/internal/application"
 	web "real-estate-sdr/internal/http"
-	"real-estate-sdr/internal/infrastructure/ai"
 	"real-estate-sdr/internal/infrastructure/postgres"
 	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
 	"testing"
@@ -37,7 +35,7 @@ func TestLeadAPI_CreateAndGet(t *testing.T) {
 		pool.Close()
 	})
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	email := uniqueEmail("integration")
 
@@ -208,7 +206,7 @@ func TestLeadAPI_List(t *testing.T) {
 		pool.Close()
 	})
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	email := uniqueEmail("list")
 
@@ -319,7 +317,7 @@ func TestLeadAPI_Update(t *testing.T) {
 		pool.Close()
 	})
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	email := uniqueEmail("update")
 
@@ -458,7 +456,7 @@ func TestLeadAPI_UpdateStatus(t *testing.T) {
 		pool.Close()
 	})
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	email := uniqueEmail("status")
 
@@ -573,7 +571,7 @@ func TestLeadAPI_NotFound(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -602,7 +600,7 @@ func TestLeadAPI_Health(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -630,7 +628,7 @@ func TestLeadAPI_Ready(t *testing.T) {
 	pool := newTestPool(t)
 	defer pool.Close()
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -681,8 +679,10 @@ func TestLeadAPI_Ready(t *testing.T) {
 }
 
 func newTestRouter(
+	t *testing.T,
 	pool *pgxpool.Pool,
 ) http.Handler {
+	t.Helper()
 	queries := generated.New(pool)
 
 	leadRepository := postgres.NewLeadRepository(
@@ -713,12 +713,7 @@ func newTestRouter(
 		queries,
 	)
 
-	aiServiceURL := os.Getenv("AI_SERVICE_URL")
-	if aiServiceURL == "" {
-		log.Fatal("AI_SERVICE_URL is not configured")
-	}
-
-	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+	aiService := newTestAIClient(t)
 
 	messageService := application.NewMessageService(
 		messageRepository,
@@ -829,7 +824,7 @@ func TestLeadAPI_Create_DuplicateEmail(t *testing.T) {
 		pool.Close()
 	})
 
-	router := newTestRouter(pool)
+	router := newTestRouter(t, pool)
 
 	email := uniqueEmail("duplicate")
 

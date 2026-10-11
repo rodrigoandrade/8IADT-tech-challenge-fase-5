@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"real-estate-sdr/internal/infrastructure/ai"
 	"testing"
 	"time"
 
@@ -81,12 +79,34 @@ func setupMessageTestServer(
 		conversationRepository,
 	)
 
-	aiServiceURL := os.Getenv("AI_SERVICE_URL")
-	if aiServiceURL == "" {
-		log.Fatal("AI_SERVICE_URL is not configured")
-	}
+	aiServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost ||
+				r.URL.Path != "/ai/generate-response" {
+				http.NotFound(w, r)
+				return
+			}
 
-	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+			if r.Header.Get("X-Internal-API-Key") != "test-ai-service-key" {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"message":     "Mock: posso ajudar você a encontrar um imóvel.",
+				"intent":      "property_interest",
+				"lead_status": "QUALIFYING",
+				"next_action": "ask_budget",
+			})
+		},
+	))
+
+	t.Cleanup(aiServer.Close)
+
+	aiService := newTestAIClient(t)
 
 	messageService := application.NewMessageService(
 		messageRepository,
