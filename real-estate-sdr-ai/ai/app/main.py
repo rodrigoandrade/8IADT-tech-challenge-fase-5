@@ -18,6 +18,9 @@ from ai.app.observability.context import (
     set_correlation_id,
 )
 
+import hmac
+
+from fastapi.responses import JSONResponse
 
 # =========================================================
 # LOGGING
@@ -244,8 +247,44 @@ async def observability_middleware(
         },
     )
 
+    if request.url.path != "/health":
+        expected_key = os.getenv(
+            "AI_SERVICE_API_KEY",
+            "",
+        )
+
+        provided_key = request.headers.get(
+            "X-Internal-API-Key",
+            "",
+        )
+
+        if not expected_key:
+            response = JSONResponse(
+                status_code=503,
+                content={
+                    "error": "service authentication is not configured",
+                },
+            )
+
+        elif not provided_key or not hmac.compare_digest(
+            provided_key,
+            expected_key,
+        ):
+            response = JSONResponse(
+                status_code=401,
+                content={
+                    "error": "unauthorized",
+                },
+            )
+
+        else:
+            response = None
+    else:
+        response = None
+
     try:
-        response = await call_next(request)
+        if response is None:
+            response = await call_next(request)
 
         duration_ms = (
             time.perf_counter() - start_time
