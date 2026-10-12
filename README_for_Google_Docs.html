@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Real Estate SDR — Arquitetura e Guia de Execução</title>
+  <style>
+    body{font-family:Arial, Helvetica, sans-serif;line-height:1.4;padding:24px;color:#111}
+    pre{white-space:pre-wrap;background:#f7f7f7;padding:12px;border-radius:6px;overflow:auto}
+    code{background:#eee;padding:2px 4px;border-radius:4px}
+    h1,h2,h3{color:#0b79d0}
+    table{border-collapse:collapse}
+    table, th, td{border:1px solid #ddd;padding:6px}
+    .checklist li{margin:6px 0}
+  </style>
+</head>
+<body>
+  <h1>Real Estate SDR --- Arquitetura e Guia de Execução</h1>
+
+  <h2>🏛️ Arquitetura da Solução</h2>
+  <p><img src="docs/arquitetura.png" alt="Arquitetura geral do Real Estate SDR AI" style="max-width:100%;height:auto"></p>
+
+  <p>Documentação dos dois serviços da solução:</p>
+  <ul>
+    <li><strong>real-estate-sdr-api</strong>: backend Go, API REST e persistência PostgreSQL.</li>
+    <li><strong>real-estate-sdr-ai</strong>: serviço Python/FastAPI para atendimento conversacional, qualificação do lead, integração com LLM e recomendação de imóveis.</li>
+  </ul>
+
+  <p>Os repositórios são separados. Este documento considera Windows PowerShell e os caminhos usados no desenvolvimento. Confirme nomes de variáveis, rotas e entrypoints no checkout atual. Nunca versione <code>.env</code> nem chaves.</p>
+
+  <h2>🗺️ 1. Visão geral</h2>
+  <pre><code>Lead / canal de entrada (ex.: Telegram)
+             |
+             v
+Python AI — localhost:8001
+  FastAPI, agentes, estado da conversa,
+  prompts, integração LLM e cliente HTTP
+             |
+             | HTTP + X-Correlation-ID
+             v
+Go API — localhost:8080
+  HTTP handlers/middleware
+  Application / casos de uso
+  Domain / regras de negócio
+  Repositories / Infrastructure / sqlc
+             |
+             v
+PostgreSQL — localhost:5432
+</code></pre>
+
+  <p>O Python conversa com o backend Go por HTTP. A persistência de negócio fica concentrada na API Go; o Python não deve acessar diretamente o PostgreSQL de negócio. O <code>X-Correlation-ID</code> permite correlacionar logs entre os serviços.</p>
+
+  <h2># 🐍 2. Projeto Python --- real-estate-sdr-ai</h2>
+  <h3>Responsabilidade</h3>
+  <p>Receber/processar mensagens, interpretar intenção, manter o estado da conversa, qualificar critérios (tipo de imóvel, região, orçamento, quartos e urgência), chamar o LLM e consultar a API Go para localizar imóveis compatíveis.</p>
+
+  <h3>Estrutura conhecida</h3>
+  <pre><code>real-estate-sdr-ai/
+├── ai/
+│   └── app/
+│       ├── main.py       # aplicação FastAPI
+│       ├── agent/        # agentes e fluxo conversacional
+│       ├── api/          # endpoints e rotas
+│       ├── clients/      # clientes HTTP para serviços externos/API Go
+│       ├── llm/          # integração com modelo de linguagem
+│       ├── models/       # modelos de entrada/saída
+│       ├── prompt/       # prompts
+│       └── services/     # serviços de aplicação e lógica de apoio
+├── requirements.txt      # dependências, se localizado na raiz
+├── .env.example          # modelo de configuração, se presente
+├── .env                  # configuração local/secrets; não versionar
+└── .venv/                # ambiente virtual local; não versionar
+</code></pre>
+
+  <p>Confira os arquivos reais com <code>Get-ChildItem -Recurse .\ai\app</code>; a lista acima é a organização lógica conhecida, não uma garantia de que todos os diretórios estejam preenchidos.</p>
+
+  <h3>Fluxo de processamento</h3>
+  <ol>
+    <li>A API recebe a mensagem e identifica o lead/conversa.</li>
+    <li>O serviço carrega o estado conversacional conhecido.</li>
+    <li>O fluxo de agente/qualificação identifica intenção e critérios.</li>
+    <li>O LLM interpreta a mensagem e/ou ajuda a compor a resposta conforme os prompts configurados.</li>
+    <li>O estado é atualizado e a máquina de estados define a próxima ação.</li>
+    <li>Quando precisa buscar imóveis, Python chama a API Go.</li>
+    <li>O resultado é convertido em recomendação ou resposta sem resultados.</li>
+    <li>A API devolve a resposta ao canal de entrada.</li>
+  </ol>
+
+  <h3>Inicialização no Windows PowerShell</h3>
+  <pre><code>cd \codes\fiap\8IADT-tech-challenge-fase-5\real-estate-sdr-ai
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+</code></pre>
+
+  <p>Se <code>.venv</code> já existir, não é necessário recriá-lo. Se o PowerShell bloquear a ativação, use o executável diretamente em <code>.venv\Scripts\python.exe</code>.</p>
+
+  <p>Configure o <code>.env</code> com base no <code>.env.example</code>, se existir. Confira as variáveis realmente lidas pelo código, incluindo a chave do provedor LLM (por exemplo, <code>OPENAI_API_KEY</code>, se aplicável), a chave interna (<code>AI_SERVICE_API_KEY</code>, se usada) e a URL da API Go. Não coloque valores secretos no README.</p>
+
+  <p>Inicie a API:</p>
+  <pre><code>.\.venv\Scripts\python.exe -m uvicorn ai.app.main:app --host 0.0.0.0 --port 8001 --reload
+</code></pre>
+
+  <p>Em outro terminal:</p>
+  <pre><code>Invoke-RestMethod http://localhost:8001/health
+</code></pre>
+
+  <p>Se estiver habilitado, a documentação OpenAPI costuma ficar em <code>http://localhost:8001/docs</code>; confirme no <code>ai/app/main.py</code>.</p>
+
+  <h3>Testes Python</h3>
+  <pre><code>.\.venv\Scripts\python.exe -m pytest -v
+.\.venv\Scripts\python.exe -m pytest -q
+</code></pre>
+
+  <p>Durante o desenvolvimento, a suíte chegou a passar com 68 testes. O número pode mudar; considere o resultado do checkout atual como referência.</p>
+
+  <h2>🐹 3. Projeto Go --- real-estate-sdr-api</h2>
+  <h3>Responsabilidade</h3>
+  <p>Expor endpoints REST, aplicar regras de negócio, coordenar casos de uso e persistir os dados em PostgreSQL. O projeto contém migrations SQL e consultas organizadas com <code>sqlc</code>.</p>
+
+  <h3>Estrutura conhecida</h3>
+  <pre><code>real-estate-sdr-api/
+├── .env
+├── .env.example
+├── docker-compose.yml
+├── scripts/
+└── backend/
+    ├── cmd/              # entrypoints
+    ├── internal/
+    │   ├── application/  # casos de uso/orquestração
+    │   ├── domain/       # conceitos e regras de domínio
+    │   ├── http/         # handlers, rotas, middleware e integração HTTP
+    │   ├── infrastructure/# banco e integrações técnicas
+    │   ├── repository/   # acesso a dados
+    │   └── observability/# logging/correlação, conforme implementação
+    ├── migrations/       # migrations SQL
+    ├── queries/          # consultas SQL usadas pelo sqlc
+    ├── Dockerfile
+    ├── go.mod
+    └── sqlc.yaml
+</code></pre>
+
+  <p>Confirme a estrutura exata com <code>Get-ChildItem .\.\backend\internal -Recurse</code>.</p>
+
+  <h3>Camadas</h3>
+  <ul>
+    <li><strong>Domain:</strong> regras e conceitos do negócio, sem depender de detalhes de HTTP ou banco.</li>
+    <li><strong>Application:</strong> coordena casos de uso.</li>
+    <li><strong>HTTP/API:</strong> recebe requisições, valida dados de transporte e chama os casos de uso.</li>
+    <li><strong>Repository/Infrastructure:</strong> implementa persistência e integrações externas.</li>
+    <li><strong>Queries/sqlc:</strong> consultas SQL e código Go tipado gerado.</li>
+    <li><strong>Migrations:</strong> evolução versionada do schema.</li>
+  </ul>
+
+  <p>A direção recomendada das dependências é de fora para dentro: handlers/infraestrutura dependem de casos de uso e abstrações; o domínio deve permanecer independente de detalhes técnicos.</p>
+
+  <h3>Subir infraestrutura com Docker Compose</h3>
+  <pre><code>cd \codes\fiap\8IADT-tech-challenge-fase-5\real-estate-sdr-api
+Get-Content .\docker-compose.yml
+docker compose up -d
+docker compose ps
+</code></pre>
+
+  <p>O ambiente usado durante o desenvolvimento tem PostgreSQL em <code>real-estate-sdr-postgres</code>, banco <code>real_estate_sdr</code>, porta local <code>5432</code>. Use o <code>docker-compose.yml</code> atual para confirmar serviço, credenciais, volume e portas.</p>
+
+  <p>Se houver <code>.env.example</code>, crie o <code>.env</code> local a partir dele e preencha os valores necessários. Não compartilhe credenciais.</p>
+
+  <h3>Migrations</h3>
+  <p>As migrations ficam em <code>backend/migrations</code>. O banco usado no desenvolvimento registrou migrations <code>001</code> a <code>007</code>. A migration 007 adicionou <code>properties.status</code>, cujos valores válidos incluem <code>AVAILABLE</code>, <code>RESERVED</code>, <code>SOLD</code>, <code>RENTED</code> e <code>INACTIVE</code>.</p>
+
+  <p>Ter migrations no banco não garante que um banco novo será migrado automaticamente. Verifique no código/scripts se a aplicação aplica migrations no startup ou se há um comando específico. Não apague volumes nem execute alterações destrutivas sem backup.</p>
+
+  <h3>Executar e testar Go</h3>
+  <pre><code>cd .\backend
+go mod download
+go test -count=1 ./...
+</code></pre>
+
+  <pre><code>Get-ChildItem .\cmd -Recurse
+</code></pre>
+
+  <p>Execute o pacote que realmente existir em <code>cmd</code>. Se o entrypoint for <code>cmd\api</code>, por exemplo:</p>
+  <pre><code>go run .\cmd\api
+</code></pre>
+
+  <p>A API local foi configurada para a porta <code>8080</code>. Valide:</p>
+  <pre><code>Invoke-RestMethod http://localhost:8080/health
+Invoke-RestMethod http://localhost:8080/ready
+</code></pre>
+
+  <p>Se a aplicação for executada pelo Compose, na raiz do projeto:</p>
+  <pre><code>docker compose up --build -d
+docker compose ps
+docker compose logs -f
+</code></pre>
+
+  <p>Não execute <code>docker compose</code> dentro de <code>backend</code> se o arquivo estiver somente na raiz.</p>
+
+  <h2>⚙️ 4. Configuração e integração Python ↔ Go</h2>
+  <p>A URL usada pelo Python deve corresponder à topologia em que os serviços estão rodando.</p>
+  <ul>
+    <li><strong>Ambos no Windows:</strong> o Python pode usar <code>http://localhost:8080</code> para alcançar a API Go local.</li>
+    <li><strong>Go em Docker, Python no Windows:</strong> com a porta Go publicada, normalmente use <code>http://localhost:8080</code>.</li>
+    <li><strong>Python em Docker, Go no host:</strong> no Docker Desktop para Windows, use <code>http://host.docker.internal:8080</code> se a porta do host estiver publicada.</li>
+    <li><strong>Ambos no Compose:</strong> use o nome DNS do serviço Go e a porta interna do container; <code>localhost</code> dentro de um container aponta para o próprio container.</li>
+    <li><strong>Azure/produção:</strong> não use <code>host.docker.internal</code>; configure a URL pública/privada correta e proteja a comunicação.</li>
+  </ul>
+
+  <p>No ambiente de desenvolvimento são usadas <code>API_KEY</code>/<code>X-API-Key</code> para chamadas protegidas da API Go e, quando habilitado, <code>AI_SERVICE_API_KEY</code>/<code>X-Internal-API-Key</code> para o serviço de IA. Confira os middlewares e clientes para saber quais endpoints exigem autenticação.</p>
+
+  <h2>🧪 5. Ordem recomendada para iniciar tudo</h2>
+  <p>Abra terminais separados.</p>
+  <h3>Terminal 1 --- banco e infraestrutura</h3>
+  <pre><code>cd \codes\fiap\8IADT-tech-challenge-fase-5\real-estate-sdr-api
+docker compose up -d
+docker compose ps
+</code></pre>
+
+  <p>Confirme que o PostgreSQL está saudável e que as migrations necessárias foram aplicadas.</p>
+
+  <h3>Terminal 2 --- API Go</h3>
+  <pre><code>docker compose logs -f
+</code></pre>
+
+  <p>Se for executar diretamente, entre em <code>backend</code>, confira <code>cmd</code> e use o entrypoint correto. Depois valide <code>/health</code> e <code>/ready</code> na porta <code>8080</code>.</p>
+
+  <h3>Terminal 3 --- Python AI</h3>
+  <pre><code>cd \codes\fiap\8IADT-tech-challenge-fase-5\real-estate-sdr-ai
+.\.venv\Scripts\python.exe -m uvicorn ai.app.main:app --host 0.0.0.0 --port 8001 --reload
+</code></pre>
+
+  <p>Valide <code>/health</code> na porta <code>8001</code>.</p>
+
+  <h3>Terminal 4 --- Telegram</h3>
+  <pre><code>cd \codes\fiap\8IADT-tech-challenge-fase-5\real-estate-sdr-ai
+.\.venv\Scripts\python.exe .\ai\scripts\telegram_bot.py
+</code></pre>
+
+  <p>O bot pode precisar de token Telegram e da URL/chave da API Go. Não exponha esses valores em logs ou no Git.</p>
+
+  <h2>🔍 6. Diagnóstico rápido</h2>
+  <pre><code>docker compose ps
+docker compose logs --tail 100
+Test-NetConnection localhost -Port 5432
+Test-NetConnection localhost -Port 8080
+Test-NetConnection localhost -Port 8001
+Invoke-RestMethod http://localhost:8001/health
+Invoke-RestMethod http://localhost:8080/health
+Invoke-RestMethod http://localhost:8080/ready
+</code></pre>
+
+  <p>Problemas frequentes:</p>
+  <ul>
+    <li><strong>Python não alcança Go:</strong> confirme a variável da URL base e a topologia host/container.</li>
+    <li><strong>401/403:</strong> confira <code>X-API-Key</code> e/ou <code>X-Internal-API-Key</code>.</li>
+    <li><strong>Banco indisponível:</strong> confira logs do PostgreSQL, credenciais, porta e configuração do Go.</li>
+    <li><strong>Tabela/coluna inexistente:</strong> confira se as migrations foram aplicadas ao banco correto.</li>
+    <li><strong>Dependência Python ausente:</strong> instale <code>requirements.txt</code> no <code>.venv</code> usado para iniciar a API.</li>
+    <li><strong>Falha em testes:</strong> execute a partir da raiz correta e confira dependências externas exigidas.</li>
+  </ul>
+
+  <h2>🔐 7. Segurança e boas práticas</h2>
+  <ol>
+    <li>Não versione <code>.env</code>, tokens ou chaves.</li>
+    <li>Mantenha <code>.env.example</code> sem secrets reais.</li>
+    <li>Não exponha PostgreSQL diretamente à internet.</li>
+    <li>Proteja endpoints e valide entrada.</li>
+    <li>Propague <code>X-Correlation-ID</code> e inclua-o nos logs.</li>
+    <li>Configure timeouts e tratamento de falhas nos clientes HTTP.</li>
+    <li>Centralize o acesso ao banco de negócio na API Go.</li>
+    <li>Em produção, remova <code>--reload</code> e configure health checks, logs, recursos e secrets.</li>
+    <li>Versione migrations e valide compatibilidade do schema antes do deploy.</li>
+    <li>Faça backup antes de operações destrutivas.</li>
+  </ol>
+
+  <h2>🔧 8. Checklist de inicialização</h2>
+  <ul class="checklist">
+    <li>[ ] PostgreSQL iniciou sem erros.</li>
+    <li>[ ] Migrations necessárias estão aplicadas ao banco correto.</li>
+    <li>[ ] API Go iniciou; <code>/health</code> responde.</li>
+    <li>[ ] <code>/ready</code> confirma a prontidão do backend/banco.</li>
+    <li>[ ] <code>go test -count=1 ./...</code> passa.</li>
+    <li>[ ] <code>.venv</code> e dependências Python estão corretos.</li>
+    <li>[ ] Variáveis de ambiente do Python estão configuradas.</li>
+    <li>[ ] Python iniciou; <code>/health</code> responde.</li>
+    <li>[ ] Python alcança a API Go pela URL correta.</li>
+    <li>[ ] <code>python -m pytest -q</code> passa.</li>
+    <li>[ ] Uma requisição de ponta a ponta foi testada com lead de teste.</li>
+    <li>[ ] Logs permitem correlacionar a requisição entre Python e Go.</li>
+  </ul>
+
+  <h2>🔧 9. Itens para conferir no checkout atual</h2>
+  <ul>
+    <li>caminho exato do entrypoint Go em <code>backend/cmd</code>;</li>
+    <li>nomes das variáveis de ambiente realmente lidas por cada serviço;</li>
+    <li>se o Compose aplica migrations automaticamente;</li>
+    <li>nomes dos serviços, portas e health checks no <code>docker-compose.yml</code>;</li>
+    <li>caminho real da suíte de testes Python;</li>
+    <li>rotas HTTP e requisitos de autenticação;</li>
+    <li>recursos adicionais necessários ao empacotamento Docker do Python.</li>
+  </ul>
+
+  <h2>## 14. 🧩 Componentes principais</h2>
+  <table>
+    <tr><th>Componente</th><th>Responsabilidade</th></tr>
+    <tr><td>FastAPI</td><td>Exposição dos endpoints HTTP</td></tr>
+    <tr><td>Agent Router</td><td>Direcionamento do fluxo conforme a intenção</td></tr>
+    <tr><td>Qualification Agent</td><td>Extração e qualificação dos critérios do lead</td></tr>
+    <tr><td>State Machine</td><td>Controle das etapas da conversa</td></tr>
+    <tr><td>Property Agent</td><td>Coordenação da busca e recomendação de imóveis</td></tr>
+    <tr><td>LLM Client</td><td>Integração com o modelo de linguagem</td></tr>
+    <tr><td>Go API Client</td><td>Comunicação com o backend de negócio</td></tr>
+    <tr><td>Property Matching Service</td><td>Aplicação dos critérios de compatibilidade</td></tr>
+  </table>
+
+  <h2>## 15. 🧪 Testes automatizados</h2>
+  <p>Execute os testes a partir da raiz do projeto:</p>
+  <pre><code>.\.venv\Scripts\python.exe -m pytest -v
+</code></pre>
+
+  <p>Para uma execução resumida:</p>
+  <pre><code>.\.venv\Scripts\python.exe -m pytest -q
+</code></pre>
+
+  <p>Os testes devem cobrir a extração de critérios, as mudanças de estado, a busca de imóveis, os casos sem resultados e o tratamento de falhas nas integrações.</p>
+
+  <h2>## 16. 📊 Observabilidade</h2>
+  <p>O serviço deve permitir acompanhar as requisições, falhas e latência das integrações.</p>
+  <ul>
+    <li>Logs estruturados.</li>
+    <li>Propagação do <code>X-Correlation-ID</code>, conforme a implementação.</li>
+    <li>Endpoint de saúde <code>/health</code>.</li>
+    <li>Monitoramento das chamadas ao LLM e à API Go.</li>
+  </ul>
+
+  <h3>### Evolução recomendada</h3>
+  <ul>
+    <li>OpenTelemetry para instrumentação de traces.</li>
+    <li>Prometheus para coleta de métricas.</li>
+    <li>Grafana para dashboards.</li>
+    <li>Loki ou Azure Monitor para centralização de logs.</li>
+  </ul>
+
+  <h2>🔐 Segurança</h2>
+  <ul>
+    <li>Manter chaves e credenciais fora do Git.</li>
+    <li>Utilizar variáveis de ambiente para configurações sensíveis.</li>
+    <li>Validar mensagens e parâmetros recebidos.</li>
+    <li>Configurar timeouts nas chamadas externas.</li>
+    <li>Evitar registrar tokens ou dados pessoais desnecessários.</li>
+    <li>Utilizar HTTPS em ambientes de produção.</li>
+    <li>Tratar o conteúdo enviado ao LLM como entrada não confiável.</li>
+  </ul>
+
+  <h2>🧠 RAG — Retrieval-Augmented Generation</h2>
+  <p>Este documento descreve a camada de <strong>Retrieval-Augmented Generation (RAG)</strong> do projeto <code>real-estate-sdr-ai</code>, responsável por recuperar informações de uma base de conhecimento e disponibilizá-las [...]</p>
+
+  <h3>🎯 Objetivo</h3>
+  <p>O RAG complementa o contexto conversacional do lead com informações recuperadas de documentos de conhecimento do negócio. A intenção é permitir respostas mais consistentes sobre assuntos como:</p>
+  <ul>
+    <li>Regiões atendidas pela imobiliária, por exemplo, Moema.</li>
+    <li>Informações gerais sobre financiamento.</li>
+    <li>Orientações sobre visitas a imóveis.</li>
+  </ul>
+
+  <p>O RAG é uma fonte de contexto para o LLM. Ele <strong>não substitui</strong> a busca estruturada de imóveis nem deve inventar disponibilidade, preços ou características que não estejam confirmados na API de [...]</p>
+
+  <h3>🏗️ Arquitetura</h3>
+  <pre><code>Pergunta/mensagem do lead
+          |
+          v
+       AIService
+          |
+          v
+       RAGService
+          |
+          +----> EmbeddingService
+          |         |
+          |         v
+          |    Embedding de consulta
+          |
+          v
+   KnowledgeRepository
+          |
+          v
+ PostgreSQL + pgvector
+ (similaridade cosseno)
+          |
+          v
+ Trechos/documentos relevantes
+          |
+          v
+      PromptBuilder
+          |
+          v
+           LLM
+          |
+          v
+    Resposta ao lead
+</code></pre>
+
+  <p>O diagrama representa o fluxo arquitetural esperado a partir dos componentes conhecidos. Confirme no código atual os detalhes de chamada, filtros, tratamento de ausência de resultados e formato do c[...]</p>
+
+  <h3>🔎 Como funciona o fluxo RAG</h3>
+  <ol>
+    <li><strong>Recebimento da mensagem:</strong> o serviço de atendimento recebe a mensagem do lead.</li>
+    <li><strong>Geração do embedding:</strong> o <code>EmbeddingService</code> transforma a consulta em um vetor usando <code>text-embedding-3-small</code>.</li>
+    <li><strong>Recuperação semântica:</strong> o <code>KnowledgeRepository</code> consulta os documentos indexados no PostgreSQL com pgvector e ordena os resultados por similaridade cosseno.</li>
+    <li><strong>Montagem do contexto:</strong> o <code>RAGService</code> coordena a recuperação e disponibiliza os trechos relevantes para o fluxo de geração.</li>
+    <li><strong>Construção do prompt:</strong> o <code>PromptBuilder</code> incorpora o contexto recuperado ao prompt encaminhado ao LLM.</li>
+    <li><strong>Geração da resposta:</strong> o LLM produz uma resposta com base na mensagem, no contexto conversacional e no material recuperado.</li>
+  </ol>
+
+  <h3>🗄️ Persistência e busca vetorial</h3>
+  <p>A tabela conhecida para armazenar conhecimento é <code>knowledge_documents</code>. Ela é usada pela camada de persistência de conhecimento e pela busca semântica.</p>
+
+  <p>A extensão <code>pgvector</code> permite armazenar embeddings e realizar operações de similaridade diretamente no PostgreSQL, evitando a necessidade de um banco vetorial separado nesta arquitetura.</p>
+
+  <p>Antes de executar o projeto em um ambiente novo, confira as migrations e valide:</p>
+  <ul>
+    <li>Se a extensão <code>vector</code> está habilitada.</li>
+    <li>Se a tabela <code>knowledge_documents</code> foi criada.</li>
+    <li>Se a coluna vetorial tem a dimensão esperada (1536 para <code>text-embedding-3-small</code>).</li>
+    <li>Se os documentos foram efetivamente inseridos e indexados.</li>
+    <li>Se a consulta usa a métrica de similaridade esperada pela implementação.</li>
+  </ul>
+
+  <h3>📚 Conteúdo da base de conhecimento</h3>
+  <p>Os tipos de conteúdo considerados para a base incluem:</p>
+  <table>
+    <tr><th>Tema</th><th>Exemplo de informação</th></tr>
+    <tr><td>Regiões atendidas</td><td>Bairros e regiões em que a imobiliária atua</td></tr>
+    <tr><td>Financiamento</td><td>Orientações gerais sobre o processo de financiamento</td></tr>
+    <tr><td>Visitas</td><td>Orientações para agendamento e visita a imóveis</td></tr>
+  </table>
+
+  <h3>🧩 Separação entre RAG e busca de imóveis</h3>
+  <p>O projeto mantém duas responsabilidades distintas:</p>
+  <ul>
+    <li><strong>RAG:</strong> recupera conhecimento textual para contextualizar respostas, como orientações sobre regiões, financiamento e visitas.</li>
+    <li><strong>Property Matching:</strong> consulta os dados estruturados dos imóveis e aplica critérios como tipo, região, orçamento, quartos e disponibilidade.</li>
+  </ul>
+
+  <h3>⚙️ Configuração</h3>
+  <p>A geração de embeddings depende de credenciais válidas do provedor de embeddings. Confira no código e no arquivo <code>.env.example</code> os nomes reais das variáveis de ambiente utilizadas.</p>
+
+  <h3>🧪 Validação e testes</h3>
+  <p>A validação deve cobrir separadamente a geração de embeddings, a persistência, a recuperação semântica e a integração com a geração de respostas.</p>
+
+  <h3>Verificações recomendadas</h3>
+  <ul>
+    <li>A extensão pgvector está habilitada no banco.</li>
+    <li>A tabela <code>knowledge_documents</code> existe.</li>
+    <li>Existem documentos de conhecimento indexados.</li>
+    <li>O <code>EmbeddingService</code> gera vetores com a dimensão esperada.</li>
+    <li>O <code>KnowledgeRepository</code> recupera documentos relevantes para uma consulta.</li>
+    <li>O <code>RAGService</code> trata consultas sem resultados.</li>
+    <li>O <code>PromptBuilder</code> recebe o contexto recuperado.</li>
+    <li>A resposta final não apresenta conteúdo do RAG como fato quando o contexto não dá suporte.</li>
+    <li>A busca estruturada de imóveis continua consultando a API Go.</li>
+  </ul>
+
+  <h3>Exemplos de perguntas para um teste ponta a ponta</h3>
+  <p>Use somente depois de confirmar que há documentos correspondentes na base:</p>
+  <ul>
+    <li>“Vocês atendem a região de Moema?”</li>
+    <li>“Como funciona o processo de financiamento?”</li>
+    <li>“Como posso agendar uma visita a um imóvel?”</li>
+  </ul>
+
+  <h2>🔐 Segurança e confiabilidade</h2>
+  <ul>
+    <li>Trate a mensagem do lead e o conteúdo recuperado como entradas não confiáveis.</li>
+    <li>Instrua o LLM a não seguir instruções encontradas dentro dos documentos que tentem substituir as regras do sistema.</li>
+    <li>Não armazene segredos ou dados pessoais desnecessários nos documentos.</li>
+    <li>Registre falhas e métricas de recuperação sem expor chaves ou informações sensíveis.</li>
+    <li>Quando não houver contexto relevante, prefira uma resposta limitada ou encaminhamento apropriado em vez de inventar informações.</li>
+    <li>Não permita que o contexto recuperado substitua as regras de negócio da API Go.</li>
+  </ul>
+
+  <h2>📈 Melhorias futuras</h2>
+  <ul>
+    <li>Estratégia de divisão de documentos em trechos (chunking) e sobreposição.</li>
+    <li>Metadados para filtrar documentos por categoria, região ou versão.</li>
+    <li>Limiar mínimo de similaridade e controle do número de resultados recuperados.</li>
+    <li>Avaliação com conjunto de perguntas e respostas esperadas.</li>
+    <li>Métricas de recuperação, latência e taxa de consultas sem resultados.</li>
+    <li>Versionamento e reindexação de documentos.</li>
+    <li>Avaliação de respostas com e sem RAG.</li>
+  </ul>
+
+  <h2>📌 Resumo</h2>
+  <p>A camada RAG do <code>real-estate-sdr-ai</code> combina embeddings da OpenAI, PostgreSQL com pgvector, recuperação semântica por similaridade cosseno e integração do contexto recuperado ao prompt do LLM. Se[...]</p>
+
+  <footer style="margin-top:24px;color:#666;font-size:0.9em">Gerado a partir de README.md — pronto para importação no Google Docs. Para melhores resultados, importe este arquivo HTML no Google Drive (Novo → Upload de arquivo) e abra com Google Docs.</footer>
+</body>
+</html>
