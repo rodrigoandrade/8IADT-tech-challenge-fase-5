@@ -266,3 +266,17 @@ Problemas comuns:
 - TELEGRAM_BOT_USERNAME=real_estate_sdr_ai_bot
 - TELEGRAM_POLLING_TIMEOUT=30
 - TELEGRAM_LEAD_MAPPING=
+
+# 13. Iniciar BOT Telegram
+- .\.venv\Scripts\python.exe -u .\ai\scripts\telegram_bot.py
+
+# 14. Iniciar Testes Unitarios
+- python -m pytest .\ai\test -v
+
+# 15. Iniciar Docker
+- docker compose stop
+- docker compose start
+- docker compose up -d --build
+- docker compose ps
+- docker compose config
+- docker volume ls

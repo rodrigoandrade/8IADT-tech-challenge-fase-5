@@ -516,3 +516,179 @@ Essas ferramentas são recomendações e não devem ser consideradas implementad
 - Utilizar HTTPS em ambientes de produção.
 - Tratar o conteúdo enviado ao LLM como entrada não confiável.
 
+
+## 🧠 RAG — Retrieval-Augmented Generation
+
+Este documento descreve a camada de **Retrieval-Augmented Generation (RAG)** do projeto `real-estate-sdr-ai`, responsável por recuperar informações de uma base de conhecimento e disponibilizá-las ao modelo de linguagem durante a geração de respostas.
+
+> **Escopo:** a arquitetura abaixo registra os componentes conhecidos da implementação. A validação ponta a ponta deve ser confirmada no checkout atual, incluindo ingestão/indexação dos documentos e perguntas reais feitas pelo canal de atendimento.
+
+### 🎯 Objetivo
+
+O RAG complementa o contexto conversacional do lead com informações recuperadas de documentos de conhecimento do negócio. A intenção é permitir respostas mais consistentes sobre assuntos como:
+
+- Regiões atendidas pela imobiliária, por exemplo, Moema.
+- Informações gerais sobre financiamento.
+- Orientações sobre visitas a imóveis.
+
+O RAG é uma fonte de contexto para o LLM. Ele **não substitui** a busca estruturada de imóveis nem deve inventar disponibilidade, preços ou características que não estejam confirmados na API de negócio.
+
+### 🏗️ Arquitetura
+
+A implementação conhecida utiliza:
+
+- **PostgreSQL + pgvector** para armazenar documentos e vetores.
+- **OpenAI `text-embedding-3-small`** para gerar embeddings de 1536 dimensões.
+- `EmbeddingService` para gerar embeddings.
+- `KnowledgeRepository` para persistir e recuperar documentos por similaridade cosseno.
+- `RAGService` para coordenar a recuperação de contexto.
+- Integração com `AIService`, rotas de atendimento e `PromptBuilder` para fornecer o contexto recuperado ao prompt do LLM.
+
+```text
+Pergunta/mensagem do lead
+          |
+          v
+       AIService
+          |
+          v
+       RAGService
+          |
+          +----> EmbeddingService
+          |         |
+          |         v
+          |    Embedding de consulta
+          |
+          v
+   KnowledgeRepository
+          |
+          v
+ PostgreSQL + pgvector
+ (similaridade cosseno)
+          |
+          v
+ Trechos/documentos relevantes
+          |
+          v
+      PromptBuilder
+          |
+          v
+           LLM
+          |
+          v
+    Resposta ao lead
+```
+
+O diagrama representa o fluxo arquitetural esperado a partir dos componentes conhecidos. Confirme no código atual os detalhes de chamada, filtros, tratamento de ausência de resultados e formato do contexto.
+
+###🔎 Como funciona o fluxo RAG
+
+1. **Recebimento da mensagem:** o serviço de atendimento recebe a mensagem do lead.
+2. **Geração do embedding:** o `EmbeddingService` transforma a consulta em um vetor usando `text-embedding-3-small`.
+3. **Recuperação semântica:** o `KnowledgeRepository` consulta os documentos indexados no PostgreSQL com pgvector e ordena os resultados por similaridade cosseno.
+4. **Montagem do contexto:** o `RAGService` coordena a recuperação e disponibiliza os trechos relevantes para o fluxo de geração.
+5. **Construção do prompt:** o `PromptBuilder` incorpora o contexto recuperado ao prompt encaminhado ao LLM.
+6. **Geração da resposta:** o LLM produz uma resposta com base na mensagem, no contexto conversacional e no material recuperado.
+
+A qualidade da resposta depende da qualidade dos documentos, dos embeddings, dos parâmetros de recuperação e das instruções do prompt.
+
+### 🗄️ Persistência e busca vetorial
+
+A tabela conhecida para armazenar conhecimento é `knowledge_documents`. Ela é usada pela camada de persistência de conhecimento e pela busca semântica.
+
+A extensão `pgvector` permite armazenar embeddings e realizar operações de similaridade diretamente no PostgreSQL, evitando a necessidade de um banco vetorial separado nesta arquitetura.
+
+Antes de executar o projeto em um ambiente novo, confira as migrations e valide:
+
+- Se a extensão `vector` está habilitada.
+- Se a tabela `knowledge_documents` foi criada.
+- Se a coluna vetorial tem a dimensão esperada (1536 para `text-embedding-3-small`).
+- Se os documentos foram efetivamente inseridos e indexados.
+- Se a consulta usa a métrica de similaridade esperada pela implementação.
+
+> Os nomes exatos das colunas, índices e migrations devem ser conferidos no código SQL do projeto.
+
+### 📚 Conteúdo da base de conhecimento
+
+Os tipos de conteúdo considerados para a base incluem:
+
+| Tema | Exemplo de informação |
+|---|---|
+| Regiões atendidas | Bairros e regiões em que a imobiliária atua |
+| Financiamento | Orientações gerais sobre o processo de financiamento |
+| Visitas | Orientações para agendamento e visita a imóveis |
+
+A presença desses temas no desenho da solução não comprova, por si só, que todos os documentos já estejam carregados no banco. Verifique os registros de `knowledge_documents` no ambiente em execução.
+
+### 🧩 Separação entre RAG e busca de imóveis
+
+O projeto mantém duas responsabilidades distintas:
+
+- **RAG:** recupera conhecimento textual para contextualizar respostas, como orientações sobre regiões, financiamento e visitas.
+- **Property Matching:** consulta os dados estruturados dos imóveis e aplica critérios como tipo, região, orçamento, quartos e disponibilidade.
+
+O RAG não deve ser usado como fonte definitiva para preço, status ou disponibilidade de um imóvel. Esses dados devem vir da API Go e da persistência de negócio.
+
+### ⚙️ Configuração
+
+A geração de embeddings depende de credenciais válidas do provedor de embeddings. Confira no código e no arquivo `.env.example` os nomes reais das variáveis de ambiente utilizadas.
+
+Cuidados:
+
+- Não versione o `.env` nem chaves de API.
+- Mantenha credenciais fora do README.
+- Confirme que o serviço consegue acessar o PostgreSQL.
+- Verifique se a configuração do provedor de embeddings corresponde ao modelo usado na indexação.
+- Evite misturar vetores gerados por modelos ou dimensões incompatíveis.
+
+### 🧪 Validação e testes
+
+A validação deve cobrir separadamente a geração de embeddings, a persistência, a recuperação semântica e a integração com a geração de respostas.
+
+### Verificações recomendadas
+
+- A extensão pgvector está habilitada no banco.
+- A tabela `knowledge_documents` existe.
+- Existem documentos de conhecimento indexados.
+- O `EmbeddingService` gera vetores com a dimensão esperada.
+- O `KnowledgeRepository` recupera documentos relevantes para uma consulta.
+- O `RAGService` trata consultas sem resultados.
+- O `PromptBuilder` recebe o contexto recuperado.
+- A resposta final não apresenta conteúdo do RAG como fato quando o contexto não dá suporte.
+- A busca estruturada de imóveis continua consultando a API Go.
+
+### Exemplos de perguntas para um teste ponta a ponta
+
+Use somente depois de confirmar que há documentos correspondentes na base:
+
+- “Vocês atendem a região de Moema?”
+- “Como funciona o processo de financiamento?”
+- “Como posso agendar uma visita a um imóvel?”
+
+Para cada teste, inspecione os documentos recuperados e confirme que a resposta final é consistente com o conteúdo armazenado. Esses exemplos são cenários de validação, não evidência de que a integração ponta a ponta já foi aprovada.
+
+## 🔐 Segurança e confiabilidade
+
+- Trate a mensagem do lead e o conteúdo recuperado como entradas não confiáveis.
+- Instrua o LLM a não seguir instruções encontradas dentro dos documentos que tentem substituir as regras do sistema.
+- Não armazene segredos ou dados pessoais desnecessários nos documentos.
+- Registre falhas e métricas de recuperação sem expor chaves ou informações sensíveis.
+- Quando não houver contexto relevante, prefira uma resposta limitada ou encaminhamento apropriado em vez de inventar informações.
+- Não permita que o contexto recuperado substitua as regras de negócio da API Go.
+
+## 📈 Melhorias futuras
+
+Após validar o fluxo atual, melhorias possíveis incluem:
+
+- Estratégia de divisão de documentos em trechos (*chunking*) e sobreposição.
+- Metadados para filtrar documentos por categoria, região ou versão.
+- Limiar mínimo de similaridade e controle do número de resultados recuperados.
+- Avaliação com conjunto de perguntas e respostas esperadas.
+- Métricas de recuperação, latência e taxa de consultas sem resultados.
+- Versionamento e reindexação de documentos.
+- Avaliação de respostas com e sem RAG.
+
+Esses itens são sugestões de evolução e não devem ser considerados implementados sem verificação no repositório.
+
+## 📌 Resumo
+
+A camada RAG do `real-estate-sdr-ai` combina embeddings da OpenAI, PostgreSQL com pgvector, recuperação semântica por similaridade cosseno e integração do contexto recuperado ao prompt do LLM. Seu propósito é enriquecer respostas conversacionais com conhecimento do negócio, mantendo a busca estruturada de imóveis separada e sob responsabilidade da API Go.
