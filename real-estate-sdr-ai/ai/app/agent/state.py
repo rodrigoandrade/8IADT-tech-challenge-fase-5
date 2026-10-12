@@ -225,6 +225,8 @@ class ConversationState:
 
     bedrooms: Optional[int] = None
 
+    parking_spaces: Optional[int] = None
+
     urgency: Optional[str] = None
 
     # =====================================================

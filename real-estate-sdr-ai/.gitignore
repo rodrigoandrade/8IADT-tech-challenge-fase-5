@@ -1,0 +1,57 @@
+# === Compilados e Caches do Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.elc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# === Ambientes Virtuais (Virtual Environments) ===
+.venv/
+venv/
+ENV/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# === Configurações de IDEs e Editores ===
+# VS Code
+.vscode/
+
+# PyCharm / JetBrains
+.idea/
+
+# Outros editores
+*.swp
+*~
+.DS_Store
+
+# === Arquivos de Distribuição e Empacotamento ===
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# === Variáveis de Ambiente e Segredos (NUNCA comitar) ===
+.env
+.env.local
+.env.*
+.secrets
+
+# === Bancos de Dados locais (Testes/Desenvolvimento) ===
+*.sqlite3
+*.db

@@ -27,6 +27,8 @@ from ai.app.models.ai_response import (
 
 from ai.app.agent.property_agent import PropertyAgent
 
+import re
+
 class AIService:
     """
     Serviço responsável por orquestrar o atendimento do SDR.
@@ -239,6 +241,7 @@ class AIService:
         state = self._update_state_from_llm(
             state=state,
             response=response,
+            lead_message=lead_message.content,
         )
 
         # ==============================================================
@@ -287,21 +290,22 @@ class AIService:
                     state
                 )
 
+
         # ==============================================================
-        # 12. Recomendação
+        # 12. Matching e recomendação de imóveis
         # ==============================================================
 
-        if state.next_action == NextAction.RECOMMEND_PROPERTY:
+        if state.next_action in {
+            NextAction.MATCH_PROPERTY,
+            NextAction.RECOMMEND_PROPERTY,
+        }:
+            property_response = await self.property_agent.execute(
+                state=state
+            )
 
-            # A State Machine pode chegar diretamente em
-            # RECOMMEND_PROPERTY sem passar por MATCH_PROPERTY.
-
-            if not matched_properties:
-                property_response = await self.property_agent.execute(
-                    state=state
-                )
-
-                matched_properties = property_response.matched_properties
+            matched_properties = (
+                property_response.matched_properties or []
+            )
 
             if matched_properties:
                 state = self._apply_property_match(
@@ -315,13 +319,27 @@ class AIService:
                     state=state,
                     properties=matched_properties,
                 )
+            else:
+                # A mensagem final depende do resultado real
+                # do matching, não do texto produzido pelo LLM.
+                response = self._build_no_property_response(
+                    response=response,
+                    state=state,
+                )
+
 
         # ==============================================================
         # 13. Caso não tenha encontrado imóveis
         # ==============================================================
 
+        # O resultado real do matching prevalece sobre o texto do LLM.
+        # Trata tanto o caminho MATCH_PROPERTY quanto o caminho em que a
+        # máquina de estados já chegou diretamente a RECOMMEND_PROPERTY.
         if (
-            state.next_action == NextAction.MATCH_PROPERTY
+            state.next_action in (
+                NextAction.MATCH_PROPERTY,
+                NextAction.RECOMMEND_PROPERTY,
+            )
             and not matched_properties
         ):
             response = self._build_no_property_response(
@@ -380,138 +398,167 @@ class AIService:
     # LLM -> STATE
     # ==================================================================
 
+
     def _update_state_from_llm(
         self,
         state: ConversationState,
         response: AIResponse,
+        lead_message: str | None = None,
     ) -> ConversationState:
+        """Atualiza apenas os critérios informados, preservando os demais."""
+        qualification = dict(response.qualification or {})
+        original_state = state
+        raw_message = (lead_message or "").strip()
+        message = raw_message.casefold()
 
-        qualification = response.qualification or {}
+        property_patterns = (
+            (r"\bapartamentos?\b", "apartamento"),
+            (r"\bcasas?\b", "casa"),
+            (r"\bstudios?\b", "studio"),
+            (r"\bkitnets?\b", "kitnet"),
+            (r"\bterrenos?\b", "terreno"),
+        )
 
-        # --------------------------------------------------------------
-        # Intent
-        # --------------------------------------------------------------
+        # A mensagem do usuário prevalece sobre qualquer valor inferido pelo LLM.
+        explicit_property_type = next(
+            (value for pattern, value in property_patterns
+             if re.search(pattern, message, re.IGNORECASE)),
+            None,
+        )
+
+        # Só extrai urgência como resposta direta quando a pergunta anterior
+        # era sobre prazo; isso evita interpretar qualquer número como urgência.
+        if state.next_action == NextAction.ASK_URGENCY:
+            urgency_match = re.search(
+                r"\b(\d+)\s*(dias?|semanas?|meses?)\b",
+                message,
+                re.IGNORECASE,
+            )
+            if urgency_match:
+                qualification["urgency"] = urgency_match.group(0).strip()
+            elif re.search(
+                r"\b(urgente|imediatamente|imediato|o quanto antes|"
+                r"assim que possível|agora)\b",
+                message,
+                re.IGNORECASE,
+            ):
+                qualification["urgency"] = raw_message
+
+        # Um pedido de mudança de tipo atualiza o tipo e invalida a seleção
+        # anterior, mas não apaga orçamento, região ou quartos já informados.
+        property_type_changed = bool(
+            explicit_property_type
+            and explicit_property_type != state.property_type
+        )
+        if explicit_property_type:
+            qualification["property_type"] = explicit_property_type
 
         intent = state.intent
-
         if response.intent is not None:
-            intent = self._enum_value(
-                response.intent
-            )
-
-        # --------------------------------------------------------------
-        # Transaction type
-        # --------------------------------------------------------------
+            intent = self._enum_value(response.intent)
 
         transaction_type = state.transaction_type
-
         if response.transaction_type:
             transaction_type = response.transaction_type
 
-        # --------------------------------------------------------------
-        # Flow
-        # --------------------------------------------------------------
-
         flow = state.flow
-
         if transaction_type == "buy":
             flow = ConversationFlow.BUY
-
         elif transaction_type == "investment":
             flow = ConversationFlow.INVESTMENT
 
-        # --------------------------------------------------------------
-        # Qualification
-        # --------------------------------------------------------------
-
-        region = self._value_or_current(
-            qualification,
-            "region",
-            state.region,
-        )
-
-        budget = self._value_or_current(
-            qualification,
-            "budget",
-            state.budget,
-        )
-
-        bedrooms = self._value_or_current(
-            qualification,
-            "bedrooms",
-            state.bedrooms,
-        )
-
-        urgency = self._value_or_current(
-            qualification,
-            "urgency",
-            state.urgency,
-        )
-
+        region = self._value_or_current(qualification, "region", state.region)
+        budget = self._value_or_current(qualification, "budget", state.budget)
+        bedrooms = self._value_or_current(qualification, "bedrooms", state.bedrooms)
+        urgency = self._value_or_current(qualification, "urgency", state.urgency)
         property_type = self._value_or_current(
-            qualification,
-            "property_type",
-            state.property_type,
+            qualification, "property_type", state.property_type
         )
-
         investor_profile = self._value_or_current(
-            qualification,
-            "investor_profile",
-            state.investor_profile,
+            qualification, "investor_profile", state.investor_profile
         )
-
         investment_ticket = self._value_or_current(
-            qualification,
-            "investment_ticket",
-            state.investment_ticket,
+            qualification, "investment_ticket", state.investment_ticket
         )
-
         expected_return = self._value_or_current(
-            qualification,
-            "expected_return",
-            state.expected_return,
+            qualification, "expected_return", state.expected_return
         )
 
-        # --------------------------------------------------------------
-        # Consistência entre fluxo e campos financeiros
-        # --------------------------------------------------------------
+        if explicit_property_type:
+            property_type = explicit_property_type
 
-        # "budget" pertence ao fluxo de compra.
-        # "investment_ticket" pertence ao fluxo de investimento.
-        #
-        # O LLM pode interpretar corretamente o valor e ainda assim
-        # preencher os dois campos. A aplicação é a autoridade final
-        # sobre o estado, portanto removemos a ambiguidade aqui.
+        if raw_message:
+            bedroom_match = re.search(
+                r"\b(\d+)\s*(?:quartos?|dormit[oó]rios?)\b",
+                message,
+                re.IGNORECASE,
+            )
+            if bedroom_match:
+                bedrooms = int(bedroom_match.group(1))
+
+            # Remove a expressão idiomática "na verdade" antes de procurar
+            # preposições de localização; ela não é um bairro.
+            location_text = re.sub(
+                r"\bna\s+verdade\b", " ", raw_message,
+                flags=re.IGNORECASE,
+            )
+            region_match = re.search(
+                r"\b(?:em|no|na|bairro)\s+"
+                r"(?:regi[aã]o\s+de\s+)?"
+                r"([a-záàâãéèêíïóôõöúçñ0-9]"
+                r"[a-záàâãéèêíïóôõöúçñ0-9\s'-]*?)"
+                r"(?=\s*,|\s*\.|\s*;|\s*\?|"
+                r"\s+até\b|\s+com\b|\s+por\b|"
+                r"\s+e\b|$)",
+                location_text,
+                re.IGNORECASE,
+            )
+            if region_match:
+                extracted_region = region_match.group(1).strip(" -,'\"?!")
+                # Impede palavras conversacionais de serem gravadas como bairro.
+                if extracted_region and extracted_region.casefold() not in {
+                    "verdade", "realidade", "seguida", "frente", "casa"
+                }:
+                    region = extracted_region
+
+            budget_match = re.search(
+                r"(?:até|no máximo|máximo de|"
+                r"orçamento(?:\s+agora)?(?:\s+é)?(?:\s+de)?)"
+                r"\s*R?\$?\s*"
+                r"([\d.]+(?:,[\d]{1,2})?)\s*(mil)?",
+                message,
+                re.IGNORECASE,
+            )
+            if budget_match:
+                normalized_budget = (
+                    budget_match.group(1).replace(".", "").replace(",", ".")
+                )
+                budget = float(normalized_budget)
+                if budget_match.group(2):
+                    budget *= 1000
 
         if flow == ConversationFlow.INVESTMENT:
             budget = None
-
         elif flow == ConversationFlow.BUY:
             investment_ticket = None
 
-        # --------------------------------------------------------------
-        # Qualification score
-        # --------------------------------------------------------------
-
-        qualification_score = state.qualification_score
-
-        if response.qualification_score is not None:
-            qualification_score = (
-                response.qualification_score
-            )
-
-        # --------------------------------------------------------------
-        # Selected property
-        # --------------------------------------------------------------
-
-        selected_property_id = (
-            state.selected_property_id
+        criteria_changed = (
+            region != original_state.region
+            or budget != original_state.budget
+            or bedrooms != original_state.bedrooms
+            or property_type != original_state.property_type
         )
 
-        if response.property_id:
-            selected_property_id = (
-                response.property_id
-            )
+        qualification_score = state.qualification_score
+        if response.qualification_score is not None:
+            qualification_score = response.qualification_score
+
+        # Nunca mantém o imóvel selecionado quando a busca mudou.
+        selected_property_id = state.selected_property_id
+        if criteria_changed or property_type_changed:
+            selected_property_id = None
+        elif response.property_id:
+            selected_property_id = response.property_id
 
         return self._replace_state(
             state,
@@ -657,17 +704,44 @@ class AIService:
     # NO PROPERTY RESPONSE
     # ==================================================================
 
+
     @staticmethod
     def _build_no_property_response(
         response: AIResponse,
         state: ConversationState,
     ) -> AIResponse:
+        property_type = state.property_type or "imóvel"
+        region = state.region
+        budget = state.budget
+        bedrooms = state.bedrooms
 
-        message = (
-            "Não encontrei uma opção exatamente dentro "
-            "dos critérios informados. Podemos ajustar o "
-            "orçamento, a região ou a quantidade de quartos."
-        )
+        criteria = []
+
+        if property_type:
+            criteria.append(f"tipo: {property_type}")
+
+        if region:
+            criteria.append(f"região: {region}")
+
+        if bedrooms is not None:
+            criteria.append(f"pelo menos {bedrooms} quartos")
+
+        if budget is not None:
+            criteria.append(f"até R$ {budget:,.2f}")
+
+        if criteria:
+            criteria_text = "; ".join(criteria)
+            message = (
+                "Não encontrei imóveis disponíveis que atendam "
+                f"aos critérios atuais ({criteria_text}). "
+                "Podemos ajustar algum dos filtros para ampliar "
+                "as opções."
+            )
+        else:
+            message = (
+                "Não encontrei imóveis disponíveis para os "
+                "critérios informados. Podemos ajustar a busca."
+            )
 
         return AIResponse(
             message=message,
@@ -678,8 +752,18 @@ class AIService:
             reasoning=response.reasoning,
             metadata=response.metadata,
             transaction_type=response.transaction_type,
-            qualification=response.qualification,
+            qualification={
+                "region": state.region,
+                "budget": state.budget,
+                "bedrooms": state.bedrooms,
+                "urgency": state.urgency,
+                "property_type": state.property_type,
+                "investor_profile": state.investor_profile,
+                "investment_ticket": state.investment_ticket,
+                "expected_return": state.expected_return,
+            },
         )
+
 
     # ==================================================================
     # MESSAGE PERSISTENCE
