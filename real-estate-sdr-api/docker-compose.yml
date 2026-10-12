@@ -53,6 +53,8 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       HTTP_PORT: ${HTTP_PORT}
       AI_SERVICE_URL: ${AI_SERVICE_URL}
+      API_KEY: ${API_KEY}
+      AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY}
 
     ports:
       - "${HTTP_PORT}:8080"
@@ -60,7 +62,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
       migrate:
         condition: service_completed_successfully
 

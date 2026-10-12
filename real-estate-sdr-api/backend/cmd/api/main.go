@@ -6,14 +6,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"real-estate-sdr/internal/infrastructure/ai"
 	"syscall"
 	"time"
 
 	"real-estate-sdr/internal/application"
 	web "real-estate-sdr/internal/http"
+	"real-estate-sdr/internal/http/middleware"
+	"real-estate-sdr/internal/infrastructure/ai"
 	"real-estate-sdr/internal/infrastructure/postgres"
 	generated "real-estate-sdr/internal/infrastructure/postgres/generated"
+	"real-estate-sdr/internal/observability"
 )
 
 func main() {
@@ -44,19 +46,6 @@ func main() {
 	// =========================================================
 	// MIGRATION MODE
 	// =========================================================
-	//
-	// Docker executa:
-	//
-	//     /app/api migrate
-	//
-	// Atualmente o projeto não possui um mecanismo de migration
-	// implementado em Go. Portanto, neste modo apenas validamos
-	// que o banco está acessível e encerramos com sucesso.
-	//
-	// As migrations/schema devem ser executadas pela infraestrutura
-	// do PostgreSQL.
-	//
-
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		migrator := postgres.NewMigrator(pool)
 
@@ -65,8 +54,20 @@ func main() {
 		}
 
 		log.Println("migrations completed successfully")
-
 		return
+	}
+
+	// =========================================================
+	// HTTP API SECURITY
+	// =========================================================
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		log.Fatal("API_KEY is not configured")
+	}
+
+	aiServiceAPIKey := os.Getenv("AI_SERVICE_API_KEY")
+	if aiServiceAPIKey == "" {
+		log.Fatal("AI_SERVICE_API_KEY is not configured")
 	}
 
 	// =========================================================
@@ -92,6 +93,14 @@ func main() {
 	)
 
 	// =========================================================
+	// OBSERVABILITY
+	// =========================================================
+
+	// Uma única instância de métricas é compartilhada
+	// entre os serviços e o endpoint /metrics.
+	metrics := observability.NewMetrics()
+
+	// =========================================================
 	// SERVICES
 	// =========================================================
 
@@ -112,12 +121,17 @@ func main() {
 		log.Fatal("AI_SERVICE_URL is not configured")
 	}
 
-	aiService := ai.NewHTTPClient(aiServiceURL, nil)
+	aiService := ai.NewHTTPClient(
+		aiServiceURL,
+		nil,
+		aiServiceAPIKey,
+	)
 
 	messageService := application.NewMessageService(
 		messageRepository,
 		conversationRepository,
 		aiService,
+		metrics,
 	)
 
 	// =========================================================
@@ -130,6 +144,12 @@ func main() {
 		conversationService,
 		messageService,
 		pool,
+		metrics,
+	)
+
+	protectedRouter := middleware.APIKey(
+		apiKey,
+		router,
 	)
 
 	// =========================================================
@@ -147,7 +167,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           router,
+		Handler:           protectedRouter,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

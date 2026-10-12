@@ -1,0 +1,121 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Real Estate SDR AI API",
+    "version": "1.0.0",
+    "description": "Especificação inicial baseada nas informações disponíveis do projeto. Confirme os contratos no código atual antes de usar como documentação definitiva."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8001",
+      "description": "Ambiente local"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Verifica a saúde do serviço de IA",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "description": "Serviço disponível",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/generate-response": {
+      "post": {
+        "summary": "Gera uma resposta conversacional para o lead",
+        "operationId": "generateResponse",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Conversation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resposta gerada pelo serviço de IA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "O schema exato da resposta precisa ser confirmado no código."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requisição inválida"
+          },
+          "401": {
+            "description": "Não autorizado, se a autenticação interna estiver habilitada"
+          },
+          "500": {
+            "description": "Erro interno ao gerar a resposta"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Conversation": {
+        "type": "object",
+        "required": [
+          "id",
+          "lead_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Identificador da conversa"
+          },
+          "lead_id": {
+            "type": "string",
+            "description": "Identificador do lead"
+          },
+          "messages": {
+            "type": "array",
+            "description": "Mensagens da conversa, quando fornecidas",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "Message": {
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "Papel do emissor da mensagem"
+          },
+          "content": {
+            "type": "string",
+            "description": "Conteúdo textual da mensagem"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

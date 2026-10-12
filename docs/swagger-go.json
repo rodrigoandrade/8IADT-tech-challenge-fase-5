@@ -1,0 +1,158 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Real Estate SDR Go API",
+    "version": "1.0.0",
+    "description": "Especificação inicial das rotas conhecidas. Os schemas de payloads e respostas não foram disponibilizados no README/contexto; os objetos estão genéricos e devem ser substituídos pelos contratos reais dos handlers/DTOs antes de publicar."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Ambiente local"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Verifica a saúde da API Go",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "description": "API disponível",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Verifica a prontidão do backend e do banco",
+        "operationId": "readinessCheck",
+        "responses": {
+          "200": {
+            "description": "API pronta"
+          },
+          "503": {
+            "description": "API não está pronta"
+          }
+        }
+      }
+    },
+    "/conversations": {
+      "post": {
+        "summary": "Cria uma conversa",
+        "operationId": "createConversation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Payload genérico provisório; conferir DTO/handler no código Go."
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Conversa criada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requisição inválida"
+          },
+          "401": {
+            "description": "Não autorizado, se a rota exigir API key"
+          },
+          "500": {
+            "description": "Erro interno"
+          }
+        }
+      },
+      "get": {
+        "summary": "Lista conversas",
+        "operationId": "listConversations",
+        "responses": {
+          "200": {
+            "description": "Lista de conversas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Não autorizado, se a rota exigir API key"
+          }
+        }
+      }
+    },
+    "/conversations/{id}": {
+      "get": {
+        "summary": "Obtém uma conversa pelo identificador",
+        "operationId": "getConversationById",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identificador da conversa",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversa encontrada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Conversa não encontrada"
+          },
+          "401": {
+            "description": "Não autorizado, se a rota exigir API key"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Use somente se o middleware da rota exigir autenticação."
+      }
+    }
+  }
+}
